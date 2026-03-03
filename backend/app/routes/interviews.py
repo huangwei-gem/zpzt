@@ -112,6 +112,7 @@ def create_interview_route(
 def get_interviews_route(
     skip: int = 0, 
     limit: int = 100, 
+    status: str = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -122,9 +123,12 @@ def get_interviews_route(
         # But we can fetch all and filter in python for now (assuming not huge volume) or use specific query.
         # Better: Update get_interviews service to handle filtering.
         from app.services.interview_service import get_interviews_for_interviewer
-        return get_interviews_for_interviewer(db, current_user.id, skip, limit)
+        interviews = get_interviews_for_interviewer(db, current_user.id, skip=0, limit=10000)
+        if status:
+            interviews = [i for i in interviews if str(i.status) == status or getattr(i.status, "value", None) == status]
+        return interviews[skip: skip + limit]
         
-    return get_interviews(db, skip=skip, limit=limit)
+    return get_interviews(db, skip=skip, limit=limit, status=status)
 
 @router.get("/{interview_id}", response_model=InterviewResponse)
 def get_interview_route(interview_id: UUID, db: Session = Depends(get_db)):

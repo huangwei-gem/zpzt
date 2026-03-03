@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Space, message, Tag, Modal, Tooltip } from 'antd';
+import { Table, Button, Space, message, Tag, Modal, Tooltip, Select } from 'antd';
 import { PlusOutlined, DeleteOutlined, PlayCircleOutlined, EyeOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useNavigate } from 'react-router-dom';
@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 const InterviewsList: React.FC = () => {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const navigate = useNavigate();
 
   const fetchInterviews = async () => {
@@ -24,6 +25,8 @@ const InterviewsList: React.FC = () => {
   useEffect(() => {
     fetchInterviews();
   }, []);
+
+  const filteredData = statusFilter ? (data as any[]).filter((i) => i?.status === statusFilter) : data;
 
   const handleDelete = (id: string) => {
     Modal.confirm({
@@ -62,6 +65,11 @@ const InterviewsList: React.FC = () => {
       title: '面试时间', 
       dataIndex: 'interview_time', 
       key: 'interview_time',
+      sorter: (a: any, b: any) => {
+        const at = a?.interview_time ? new Date(a.interview_time).getTime() : 0;
+        const bt = b?.interview_time ? new Date(b.interview_time).getTime() : 0;
+        return at - bt;
+      },
       render: (time: string) => time ? new Date(time).toLocaleString() : '-'
     },
     { 
@@ -121,12 +129,24 @@ const InterviewsList: React.FC = () => {
 
   return (
     <div>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+        <Select
+          placeholder="筛选状态"
+          allowClear
+          value={statusFilter}
+          onChange={(val) => setStatusFilter(val)}
+          style={{ width: 160 }}
+          options={[
+            { value: 'scheduled', label: '待面试' },
+            { value: 'completed', label: '已完成' },
+            { value: 'cancelled', label: '已取消' },
+          ]}
+        />
         <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/resumes')}>安排面试</Button>
       </div>
       <Table 
         columns={columns} 
-        dataSource={data} 
+        dataSource={filteredData} 
         loading={loading} 
         rowKey="id" 
         pagination={{ pageSize: 10, showSizeChanger: true }}

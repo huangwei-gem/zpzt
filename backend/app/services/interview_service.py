@@ -299,11 +299,14 @@ def export_interview_result(db: Session, interview_id: UUID, format: str = "mark
         
     return content
 
-def get_interviews(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(Interview).options(
+def get_interviews(db: Session, skip: int = 0, limit: int = 100, status: str = None):
+    query = db.query(Interview).options(
         joinedload(Interview.resume),
         joinedload(Interview.position)
-    ).offset(skip).limit(limit).all()
+    )
+    if status:
+        query = query.filter(Interview.status == status)
+    return query.offset(skip).limit(limit).all()
 
 def get_interviews_for_interviewer(db: Session, interviewer_id: UUID, skip: int = 0, limit: int = 100):
     """

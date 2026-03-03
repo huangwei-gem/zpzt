@@ -23,7 +23,7 @@ def read_file_content(file_path: str) -> str:
                 reader = PyPDF2.PdfReader(f)
                 for page in reader.pages:
                     content += page.extract_text()
-        elif ext == '.txt':
+        elif ext in ('.txt', '.md', '.markdown'):
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
         else:
