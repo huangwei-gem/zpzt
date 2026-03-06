@@ -1,24 +1,62 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Descriptions, Tag, Button, Row, Col, Typography, message, Divider, Spin, Progress, Modal, Form, Input, Space } from 'antd';
+import { Card, Descriptions, Tag, Button, Row, Col, Typography, message, Divider, Spin, Progress, Modal, Form, Input, Space, Select, Rate, List, Avatar, Statistic, Empty } from 'antd';
 import { useParams, useNavigate } from 'react-router-dom';
 import request from '../../utils/request';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { DownloadOutlined, FilePdfOutlined, FileWordOutlined, ArrowLeftOutlined, CloseCircleOutlined, EditOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons';
+import { DownloadOutlined, FilePdfOutlined, FileWordOutlined, ArrowLeftOutlined, CloseCircleOutlined, EditOutlined, SaveOutlined, ReloadOutlined, UserOutlined, CheckCircleOutlined, TeamOutlined, SolutionOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import RejectReasonSelector, { REJECT_REASONS } from '../../components/RejectReasonSelector';
+import { useAuth } from '../../contexts/AuthContext';
 
 const { Title, Paragraph, Text } = Typography;
+const { TextArea } = Input;
+
+// 状态映射
+const STATUS_MAP: Record<string, { text: string; color: string }> = {
+  pending_screening: { text: '解析中', color: 'processing' },
+  pending_review: { text: '待评审', color: 'warning' },
+  pending_dept_review: { text: '待部门评审', color: 'cyan' },
+  pending_hr_decision: { text: '待HR决策', color: 'purple' },
+  auto_rejected_pending_review: { text: 'AI建议淘汰', color: 'orange' },
+  pending_interview: { text: '待面试', color: 'geekblue' },
+  interview_passed: { text: '面试通过', color: 'green' },
+  interview_failed: { text: '面试未通过', color: 'red' },
+  offer_pending: { text: '待发Offer', color: 'purple' },
+  offer_accepted: { text: 'Offer已接受', color: 'green' },
+  offer_rejected: { text: 'Offer被拒绝', color: 'red' },
+  onboarding: { text: '入职中', color: 'blue' },
+  completed: { text: '已完成', color: 'success' },
+  rejected: { text: '已淘汰', color: 'error' },
+  waitlist: { text: '备选', color: 'gold' },
+};
 
 const ResumeDetail: React.FC = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [resume, setResume] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [form] = Form.useForm();
+  const [rejectForm] = Form.useForm();
+  const [hrDecisionForm] = Form.useForm();
+  const [deptReviewForm] = Form.useForm();
+
+  // 部门评审相关状态
+  const [deptReviewSummary, setDeptReviewSummary] = useState<any>(null);
+  const [reviewers, setReviewers] = useState<any[]>([]);
+  const [isDeptReviewModalVisible, setIsDeptReviewModalVisible] = useState(false);
+  const [isAssignReviewerModalVisible, setIsAssignReviewerModalVisible] = useState(false);
+  const [isRejectModalVisible, setIsRejectModalVisible] = useState(false);
+  const [isHRDecisionModalVisible, setIsHRDecisionModalVisible] = useState(false);
+  const [isSubmitReviewModalVisible, setIsSubmitReviewModalVisible] = useState(false);
+  const [myReview, setMyReview] = useState<any>(null);
+  const [submitReviewForm] = Form.useForm();
 
   useEffect(() => {
     if (id) {
       fetchResume(id);
+      fetchReviewers();
     }
   }, [id]);
 
@@ -37,6 +75,19 @@ const ResumeDetail: React.FC = () => {
           years_of_experience: res.parsed_data?.years_of_experience,
           recent_company: res.parsed_data?.recent_company
       });
+
+      // 获取部门评审汇总
+      if (res.status === 'pending_dept_review' || res.status === 'pending_hr_decision' || res.department_reviews) {
+        fetchDeptReviewSummary(resumeId);
+      }
+
+      // 检查当前用户是否是被指派的评审人
+      if (res.department_reviews && user?.id) {
+        const myReviewRecord = res.department_reviews.find((r: any) => r.reviewer_id === user.id);
+        if (myReviewRecord) {
+          setMyReview(myReviewRecord);
+        }
+      }
     } catch (error) {
       message.error('获取简历详情失败');
     } finally {
@@ -44,55 +95,32 @@ const ResumeDetail: React.FC = () => {
     }
   };
 
+  const fetchDeptReviewSummary = async (resumeId: string) => {
+    try {
+      const res = await request.get(`/resumes/${resumeId}/department-reviews`);
+      setDeptReviewSummary(res);
+    } catch (error) {
+      console.error('获取部门评审汇总失败', error);
+    }
+  };
+
+  const fetchReviewers = async () => {
+    try {
+      const res = await request.get('/auth/interviewers');
+      setReviewers(res);
+    } catch (error) {
+      console.error('获取评审人列表失败', error);
+    }
+  };
+
   const handleUpdate = async () => {
       try {
           const values = await form.validateFields();
-          // Update basic info in Resume model
-          // Update parsed_data if needed (backend logic might need adjustment or we update parsed_data json)
-          // For now, let's assume backend updates Resume fields. 
-          // Note: parsed_data fields are JSON, updating them via API might require specific handling if they are nested.
-          // However, our requirement is mainly basic info.
-          
-          // Construct payload. 
-          // Since our backend ResumeUpdate schema now supports candidate_name, email, contact directly.
-          // But highest_degree etc are inside parsed_data. 
-          // We might need to update parsed_data as well.
-          
-          const currentParsedData = resume.parsed_data || {};
-          const newParsedData = {
-              ...currentParsedData,
-              highest_degree: values.highest_degree,
-              school: values.school,
-              major: values.major,
-              years_of_experience: values.years_of_experience,
-              recent_company: values.recent_company
-          };
-          
-          // Actually, our backend update_resume logic (in service) uses `update_data = resume.dict(exclude_unset=True)` and `setattr`.
-          // And ResumeUpdate schema does NOT have parsed_data.
-          // So we can only update candidate_name, email, contact directly.
-          // To update parsed_data, we need to add it to ResumeUpdate schema or handle it.
-          // Let's add parsed_data to ResumeUpdate in backend first?
-          // Wait, I already checked backend schema, it DOES NOT have parsed_data in ResumeUpdate.
-          // But I can add it now.
-          
           await request.put(`/resumes/${id}`, {
               candidate_name: values.candidate_name,
               email: values.email,
               contact: values.contact,
-              // We need backend support for parsed_data update or we just update what we can.
-              // For now, let's update what we added to schema. 
-              // If user wants to edit school/degree, we should support it.
-              // Let's assume we will add parsed_data to backend schema in next step if needed, 
-              // or we just send it and see if backend accepts dynamic fields (it likely won't if using Pydantic).
-              
-              // Actually, the previous step only added candidate_name, contact, email. 
-              // So I should only allow editing those or update backend schema again.
-              // The user said "basic information", usually implies name/email/phone.
-              // But the UI shows degree/school etc.
-              // Let's stick to name/email/phone for now, and maybe parsed fields if I update backend.
           });
-          
           message.success('更新成功');
           setIsEditing(false);
           fetchResume(id!);
@@ -100,19 +128,11 @@ const ResumeDetail: React.FC = () => {
           message.error('更新失败');
       }
   };
-  
-  // Helper to get status color/text
+
   const getStatusInfo = (status: string, parseStatus?: string) => {
       if (parseStatus === 'failed') return { text: '解析失败', color: 'error' };
       if (parseStatus === 'processing') return { text: '解析中', color: 'processing' };
-      const statusMap: Record<string, any> = {
-        pending_screening: { text: '解析中', color: 'processing' },
-        pending_review: { text: '待评审', color: 'warning' },
-        pending_interview: { text: '待面试', color: 'geekblue' },
-        completed: { text: '已完成', color: 'success' },
-        rejected: { text: '已淘汰', color: 'error' },
-      };
-      return statusMap[status] || { text: status, color: 'default' };
+      return STATUS_MAP[status] || { text: status, color: 'default' };
   };
 
   if (loading || !resume) {
@@ -146,6 +166,295 @@ const ResumeDetail: React.FC = () => {
     });
   };
 
+  // 确认淘汰低分简历
+  const handleConfirmRejection = async () => {
+    try {
+      const values = await rejectForm.validateFields();
+      const formData = new FormData();
+      formData.append('reason_category', values.reject_reason_category);
+      if (values.reject_reason_detail) {
+        formData.append('reason_detail', values.reject_reason_detail);
+      }
+      formData.append('hr_id', user?.id || '');
+
+      await request.post(`/resumes/${id}/confirm-rejection`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      message.success('已确认淘汰');
+      setIsRejectModalVisible(false);
+      rejectForm.resetFields();
+      fetchResume(id!);
+    } catch (error) {
+      message.error('操作失败');
+    }
+  };
+
+  // 覆盖AI淘汰建议
+  const handleOverrideRejection = async () => {
+    Modal.confirm({
+      title: '恢复简历',
+      content: '确定要将此简历恢复到评审流程吗？',
+      okText: '确认',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const formData = new FormData();
+          formData.append('hr_id', user?.id || '');
+          await request.post(`/resumes/${id}/override-rejection`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          });
+          message.success('已恢复到评审流程');
+          fetchResume(id!);
+        } catch (error) {
+          message.error('操作失败');
+        }
+      }
+    });
+  };
+
+  // 指派评审人
+  const handleAssignReviewer = async () => {
+    try {
+      const values = await deptReviewForm.validateFields();
+      const reviewerIds = values.reviewer_ids; // 多选
+
+      // 批量指派评审人
+      for (const reviewerId of reviewerIds) {
+        const formData = new FormData();
+        formData.append('reviewer_id', reviewerId);
+        await request.post(`/resumes/${id}/department-reviews`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+      }
+
+      message.success(`已指派 ${reviewerIds.length} 位评审人`);
+      setIsAssignReviewerModalVisible(false);
+      deptReviewForm.resetFields();
+      fetchResume(id!);
+      fetchDeptReviewSummary(id!);
+    } catch (error) {
+      message.error('指派失败');
+    }
+  };
+
+  // HR决策
+  const handleHRDecision = async () => {
+    try {
+      const values = await hrDecisionForm.validateFields();
+
+      if (values.decision === 'rejected' && !values.reject_reason_category) {
+        message.error('淘汰时必须选择淘汰原因');
+        return;
+      }
+
+      const payload: any = {
+        hr_id: user?.id,
+        decision: values.decision,
+        hr_comment: values.hr_comment || null,
+      };
+
+      if (values.decision === 'rejected') {
+        payload.reject_reason_category = values.reject_reason_category;
+        payload.reject_reason_detail = values.reject_reason_detail || null;
+      }
+
+      await request.post(`/resumes/${id}/hr-decision`, payload);
+
+      message.success('决策已提交');
+      setIsHRDecisionModalVisible(false);
+      hrDecisionForm.resetFields();
+      fetchResume(id!);
+    } catch (error) {
+      message.error('操作失败');
+    }
+  };
+
+  // 提交部门评审
+  const handleSubmitReview = async () => {
+    try {
+      const values = await submitReviewForm.validateFields();
+      const formData = new FormData();
+      formData.append('reviewer_id', user?.id || '');
+      formData.append('technical_score', values.technical_score || '');
+      formData.append('experience_score', values.experience_score || '');
+      formData.append('overall_score', values.overall_score || '');
+      formData.append('recommendation', values.recommendation || '');
+      formData.append('comment', values.comment || '');
+
+      await request.put(
+        `/resumes/${id}/department-reviews/${myReview.id}`,
+        formData,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      );
+
+      message.success('评审已提交');
+      setIsSubmitReviewModalVisible(false);
+      submitReviewForm.resetFields();
+      fetchResume(id!);
+      fetchDeptReviewSummary(id!);
+    } catch (error) {
+      message.error('提交失败');
+    }
+  };
+
+  // 渲染操作按钮区域
+  const renderActionButtons = () => {
+    const buttons: React.ReactNode[] = [];
+
+    // 检查当前用户是否是被指派的评审人且未完成评审
+    const isAssignedReviewer = myReview && !myReview.is_completed;
+    const userRole = user?.role;
+
+    // 如果是被指派的评审人，显示提交评审按钮
+    if (isAssignedReviewer) {
+      buttons.push(
+        <Button
+          key="submit-review"
+          type="primary"
+          icon={<SolutionOutlined />}
+          onClick={() => setIsSubmitReviewModalVisible(true)}
+        >
+          提交评审
+        </Button>
+      );
+      return buttons; // 评审人只显示提交评审按钮
+    }
+
+    // 以下操作仅对 HR 和 Admin 显示
+    if (userRole !== 'admin' && userRole !== 'hr') {
+      return buttons;
+    }
+
+    // 基础操作
+    if (!isEditing) {
+      buttons.push(
+        <Button key="reparse" icon={<ReloadOutlined />} onClick={handleReparse} disabled={resume?.parse_status === 'processing'}>重新解析</Button>,
+        <Button key="edit" icon={<EditOutlined />} onClick={() => setIsEditing(true)}>编辑</Button>
+      );
+    } else {
+      buttons.push(
+        <Button key="save" icon={<SaveOutlined />} type="primary" onClick={handleUpdate}>保存</Button>,
+        <Button key="cancel" onClick={() => setIsEditing(false)}>取消</Button>
+      );
+      return buttons;
+    }
+
+    // 根据状态显示不同操作
+    if (resume.status === 'auto_rejected_pending_review') {
+      buttons.push(
+        <Button key="confirm-reject" danger icon={<CloseCircleOutlined />} onClick={() => setIsRejectModalVisible(true)}>确认淘汰</Button>,
+        <Button key="override" type="primary" icon={<CheckCircleOutlined />} onClick={handleOverrideRejection}>恢复评审</Button>
+      );
+    } else if (resume.status === 'pending_review') {
+      // 待评审状态：可以直接HR决策，指派评审人在部门评审卡片头部
+      buttons.push(
+        <Button key="hr-decision" icon={<SolutionOutlined />} onClick={() => setIsHRDecisionModalVisible(true)}>直接决策</Button>
+      );
+    } else if (resume.status === 'pending_hr_decision') {
+      buttons.push(
+        <Button key="hr-decision" type="primary" icon={<SolutionOutlined />} onClick={() => setIsHRDecisionModalVisible(true)}>HR决策</Button>
+      );
+    } else if (resume.status === 'pending_interview') {
+      // 初审通过，可以安排面试
+      buttons.push(
+        <Button key="schedule-interview" type="primary" icon={<TeamOutlined />} onClick={() => navigate('/resumes')}>安排面试</Button>
+      );
+    } else if (resume.status !== 'rejected' && resume.status !== 'completed') {
+      buttons.push(
+        <Button key="reject" danger icon={<CloseCircleOutlined />} onClick={() => setIsRejectModalVisible(true)}>淘汰</Button>
+      );
+    }
+
+    return buttons;
+  };
+
+  // 渲染部门评审区域
+  const renderDepartmentReviewSection = () => {
+    if (!['pending_review', 'pending_dept_review', 'pending_hr_decision', 'rejected', 'completed', 'waitlist', 'pending_interview'].includes(resume.status)) {
+      return null;
+    }
+
+    return (
+      <Card
+        title={<span><TeamOutlined style={{ marginRight: 8 }} />部门评审</span>}
+        style={{ marginTop: 24, borderRadius: '16px' }}
+        extra={['pending_review', 'pending_dept_review'].includes(resume.status) && (user?.role === 'admin' || user?.role === 'hr') && (
+          <Button type="primary" size="small" onClick={() => setIsAssignReviewerModalVisible(true)}>指派评审人</Button>
+        )}
+      >
+        {deptReviewSummary && deptReviewSummary.total_reviewers > 0 ? (
+          <>
+            <Row gutter={24} style={{ marginBottom: 24 }}>
+              <Col span={6}>
+                <Statistic title="评审人数" value={`${deptReviewSummary.completed_reviewers}/${deptReviewSummary.total_reviewers}`} />
+              </Col>
+              <Col span={6}>
+                <Statistic
+                  title="技术评分"
+                  value={deptReviewSummary.avg_technical_score?.toFixed(1) || '-'}
+                  suffix={deptReviewSummary.avg_technical_score ? '/10' : ''}
+                />
+              </Col>
+              <Col span={6}>
+                <Statistic
+                  title="经验评分"
+                  value={deptReviewSummary.avg_experience_score?.toFixed(1) || '-'}
+                  suffix={deptReviewSummary.avg_experience_score ? '/10' : ''}
+                />
+              </Col>
+              <Col span={6}>
+                <Statistic title="推荐比例" value={(deptReviewSummary.recommend_ratio * 100).toFixed(0)} suffix="%" />
+              </Col>
+            </Row>
+
+            {deptReviewSummary.reviews && deptReviewSummary.reviews.length > 0 && (
+              <List
+                header="评审详情"
+                dataSource={deptReviewSummary.reviews}
+                renderItem={(review: any) => (
+                  <List.Item>
+                    <List.Item.Meta
+                      avatar={<Avatar icon={<UserOutlined />} />}
+                      title={
+                        <Space>
+                          <span>{review.reviewer_name || '评审人'}</span>
+                          <Tag color={review.is_completed ? 'green' : 'default'}>
+                            {review.is_completed ? '已完成' : '待评审'}
+                          </Tag>
+                          {review.recommendation && review.is_completed && (
+                            <Tag color={review.recommendation === 'recommend' ? 'green' : review.recommendation === 'not_recommend' ? 'red' : 'gold'}>
+                              {review.recommendation === 'recommend' ? '推荐' : review.recommendation === 'not_recommend' ? '不推荐' : '待定'}
+                            </Tag>
+                          )}
+                        </Space>
+                      }
+                      description={
+                        review.is_completed ? (
+                          <Space direction="vertical" style={{ width: '100%' }}>
+                            <Space>
+                              <Text type="secondary">技术: {review.technical_score}/10</Text>
+                              <Text type="secondary">经验: {review.experience_score}/10</Text>
+                              <Text type="secondary">综合: {review.overall_score}/10</Text>
+                            </Space>
+                            {review.comment && <Text>{review.comment}</Text>}
+                          </Space>
+                        ) : (
+                          <Text type="secondary">等待评审</Text>
+                        )
+                      }
+                    />
+                  </List.Item>
+                )}
+              />
+            )}
+          </>
+        ) : (
+          <Empty description="暂无部门评审记录" />
+        )}
+      </Card>
+    );
+  };
+
   return (
     <div style={{ height: 'calc(100vh - 100px)', display: 'flex', flexDirection: 'column' }}>
       <div style={{ marginBottom: 16 }}>
@@ -163,9 +472,9 @@ const ResumeDetail: React.FC = () => {
         <div style={{ flex: 1, background: '#F1F5F9' }}>
           {fileUrl ? (
             isPdf ? (
-              <iframe 
-                src={fileUrl} 
-                style={{ width: '100%', height: '100%', border: 'none' }} 
+              <iframe
+                src={fileUrl}
+                style={{ width: '100%', height: '100%', border: 'none' }}
                 title="Resume Preview"
               />
             ) : (
@@ -185,8 +494,8 @@ const ResumeDetail: React.FC = () => {
 
       {/* Right: AI Analysis & Details */}
       <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px' }}>
-        <Card 
-          bordered={false} 
+        <Card
+          bordered={false}
           style={{ borderRadius: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid #E2E8F0' }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
@@ -200,7 +509,7 @@ const ResumeDetail: React.FC = () => {
               ) : (
                   <Title level={2} style={{ margin: 0 }}>{resume.candidate_name}</Title>
               )}
-              
+
               <div style={{ marginTop: 8 }}>
                 {isEditing ? (
                     <Form form={form} layout="inline" style={{ marginTop: 8 }}>
@@ -219,17 +528,17 @@ const ResumeDetail: React.FC = () => {
                 )}
               </div>
             </div>
-            
+
             <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: 16 }}>
               <div style={{ textAlign: 'center' }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>匹配度</Text>
                 <div style={{ marginTop: 4 }}>
-                  <Progress 
-                    type="circle" 
-                    percent={resume.match_score} 
-                    width={50} 
-                    format={percent => <span style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{percent}%</span>} 
-                    strokeColor={resume.match_score >= 80 ? '#10B981' : resume.match_score >= 60 ? '#F59E0B' : '#EF4444'} 
+                  <Progress
+                    type="circle"
+                    percent={resume.match_score}
+                    width={50}
+                    format={percent => <span style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{percent}%</span>}
+                    strokeColor={resume.match_score >= 80 ? '#10B981' : resume.match_score >= 60 ? '#F59E0B' : '#EF4444'}
                   />
                 </div>
               </div>
@@ -238,39 +547,10 @@ const ResumeDetail: React.FC = () => {
                   {statusInfo.text}
                 </Tag>
               </div>
-              
-              {!isEditing ? (
-                  <Space>
-                    <Button icon={<ReloadOutlined />} onClick={handleReparse} disabled={resume?.parse_status === 'processing'}>重新解析</Button>
-                    <Button icon={<EditOutlined />} onClick={() => setIsEditing(true)}>编辑</Button>
-                  </Space>
-              ) : (
-                  <Space>
-                      <Button icon={<SaveOutlined />} type="primary" onClick={handleUpdate}>保存</Button>
-                      <Button onClick={() => setIsEditing(false)}>取消</Button>
-                  </Space>
-              )}
-              
-              {resume.status !== 'rejected' && resume.status !== 'completed' && !isEditing && (
-                <Button danger icon={<CloseCircleOutlined />} onClick={() => {
-                    Modal.confirm({
-                      title: '确认淘汰',
-                      content: '确定要淘汰这份简历吗？',
-                      okText: '确认',
-                      cancelText: '取消',
-                      okType: 'danger',
-                      onOk: async () => {
-                        try {
-                          await request.put(`/resumes/${id}`, { status: 'rejected' });
-                          message.success('已标记为淘汰');
-                          fetchResume(id!);
-                        } catch (error) {
-                          message.error('操作失败');
-                        }
-                      },
-                    });
-                }}>淘汰</Button>
-              )}
+
+              <Space>
+                {renderActionButtons()}
+              </Space>
             </div>
           </div>
 
@@ -283,19 +563,27 @@ const ResumeDetail: React.FC = () => {
             <Descriptions.Item label="最近公司">{parsedData.recent_company || '未识别'}</Descriptions.Item>
             <Descriptions.Item label="解析状态">{statusInfo.text}</Descriptions.Item>
             <Descriptions.Item label="失败原因">{resume.parse_status === 'failed' ? (resume.parse_error || '未知') : '-'}</Descriptions.Item>
+            {resume.reject_reason_category && (
+              <>
+                <Descriptions.Item label="淘汰原因">
+                  {REJECT_REASONS.find(r => r.value === resume.reject_reason_category)?.label || resume.reject_reason_category}
+                </Descriptions.Item>
+                <Descriptions.Item label="详细说明">{resume.reject_reason_detail || '-'}</Descriptions.Item>
+              </>
+            )}
           </Descriptions>
 
           <Divider style={{ borderColor: '#E2E8F0' }}>AI 初审评价</Divider>
-          <div style={{ 
-            background: '#F8FAFC', 
-            padding: '20px', 
-            borderRadius: '12px', 
-            border: '1px solid #E2E8F0', 
+          <div style={{
+            background: '#F8FAFC',
+            padding: '20px',
+            borderRadius: '12px',
+            border: '1px solid #E2E8F0',
             color: '#334155',
             fontSize: '15px',
             lineHeight: 1.8
           }}>
-            <ReactMarkdown 
+            <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
                 h3: ({node, ...props}) => <h3 style={{ color: '#0F172A', marginTop: '16px', marginBottom: '8px', fontSize: '16px' }} {...props} />,
@@ -308,8 +596,174 @@ const ResumeDetail: React.FC = () => {
             </ReactMarkdown>
           </div>
         </Card>
+
+        {/* 部门评审区域 */}
+        {renderDepartmentReviewSection()}
       </div>
       </div>
+
+      {/* 淘汰确认弹窗 */}
+      <Modal
+        title="确认淘汰"
+        open={isRejectModalVisible}
+        onOk={handleConfirmRejection}
+        onCancel={() => { setIsRejectModalVisible(false); rejectForm.resetFields(); }}
+        okText="确认淘汰"
+        cancelText="取消"
+        okType="danger"
+      >
+        <Form form={rejectForm} layout="vertical" style={{ marginTop: 24 }}>
+          <RejectReasonSelector />
+        </Form>
+      </Modal>
+
+      {/* 指派评审人弹窗 */}
+      <Modal
+        title="指派部门评审人"
+        open={isAssignReviewerModalVisible}
+        onOk={handleAssignReviewer}
+        onCancel={() => { setIsAssignReviewerModalVisible(false); deptReviewForm.resetFields(); }}
+        okText="确认指派"
+        cancelText="取消"
+      >
+        <Form form={deptReviewForm} layout="vertical" style={{ marginTop: 24 }}>
+          <Form.Item
+            name="reviewer_ids"
+            label="选择评审人（可多选）"
+            rules={[{ required: true, message: '请选择至少一位评审人' }]}
+          >
+            <Select
+              mode="multiple"
+              placeholder="请选择评审人，可多选"
+              size="large"
+              showSearch
+              optionFilterProp="children"
+              style={{ width: '100%' }}
+            >
+              {reviewers.map((r: any) => (
+                <Select.Option key={r.id} value={r.id}>{r.full_name || r.email}</Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* HR决策弹窗 */}
+      <Modal
+        title="HR决策"
+        open={isHRDecisionModalVisible}
+        onOk={handleHRDecision}
+        onCancel={() => { setIsHRDecisionModalVisible(false); hrDecisionForm.resetFields(); }}
+        okText="提交决策"
+        cancelText="取消"
+        width={500}
+      >
+        <Form form={hrDecisionForm} layout="vertical" style={{ marginTop: 24 }}>
+          <Form.Item
+            name="decision"
+            label="决策结果"
+            rules={[{ required: true, message: '请选择决策结果' }]}
+          >
+            <Select placeholder="请选择决策结果" size="large">
+              <Select.Option value="pending_interview">进入面试</Select.Option>
+              <Select.Option value="waitlist">加入备选</Select.Option>
+              <Select.Option value="rejected">淘汰</Select.Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            noStyle
+            shouldUpdate={(prevValues, currentValues) => prevValues.decision !== currentValues.decision}
+          >
+            {({ getFieldValue }) =>
+              getFieldValue('decision') === 'rejected' && (
+                <RejectReasonSelector />
+              )
+            }
+          </Form.Item>
+
+          <Form.Item
+            name="hr_comment"
+            label="HR备注"
+          >
+            <TextArea rows={3} placeholder="请输入备注信息（可选）" maxLength={500} showCount />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 提交评审弹窗 */}
+      <Modal
+        title="提交部门评审"
+        open={isSubmitReviewModalVisible}
+        onOk={handleSubmitReview}
+        onCancel={() => { setIsSubmitReviewModalVisible(false); submitReviewForm.resetFields(); }}
+        okText="提交评审"
+        cancelText="取消"
+        width={500}
+      >
+        <Form form={submitReviewForm} layout="vertical" style={{ marginTop: 24 }}>
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item
+                name="technical_score"
+                label="技术评分"
+                extra="1-10分"
+              >
+                <Select placeholder="技术评分" size="large">
+                  {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                    <Select.Option key={n} value={n}>{n}分</Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="experience_score"
+                label="经验评分"
+                extra="1-10分"
+              >
+                <Select placeholder="经验评分" size="large">
+                  {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                    <Select.Option key={n} value={n}>{n}分</Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="overall_score"
+                label="综合评分"
+                extra="1-10分"
+              >
+                <Select placeholder="综合评分" size="large">
+                  {[1,2,3,4,5,6,7,8,9,10].map(n => (
+                    <Select.Option key={n} value={n}>{n}分</Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item
+            name="recommendation"
+            label="推荐意见"
+            rules={[{ required: true, message: '请选择推荐意见' }]}
+          >
+            <Select placeholder="请选择推荐意见" size="large">
+              <Select.Option value="recommend">推荐</Select.Option>
+              <Select.Option value="not_recommend">不推荐</Select.Option>
+              <Select.Option value="pending">待定</Select.Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            name="comment"
+            label="评审意见"
+          >
+            <TextArea rows={4} placeholder="请输入详细评审意见（可选）" maxLength={1000} showCount />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

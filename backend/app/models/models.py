@@ -95,8 +95,11 @@ class ScreeningResult(str, enum.Enum):
 class ResumeStatus(str, enum.Enum):
     PENDING_SCREENING = "pending_screening"
     PENDING_REVIEW = "pending_review"
+    PENDING_DEPT_REVIEW = "pending_dept_review"  # 待用人部门初评
+    PENDING_HR_DECISION = "pending_hr_decision"  # 待HR综合决策
+    AUTO_REJECTED_PENDING_REVIEW = "auto_rejected_pending_review"  # AI建议淘汰，待人工确认
     PENDING_INTERVIEW = "pending_interview"
-    INTERVIEW_PASSED = "interview_passed" # Initial interview passed
+    INTERVIEW_PASSED = "interview_passed"  # Initial interview passed
     INTERVIEW_FAILED = "interview_failed"
     OFFER_PENDING = "offer_pending"
     OFFER_ACCEPTED = "offer_accepted"
@@ -104,6 +107,16 @@ class ResumeStatus(str, enum.Enum):
     ONBOARDING = "onboarding"
     COMPLETED = "completed"
     REJECTED = "rejected"
+    WAITLIST = "waitlist"  # 备选
+
+class RejectReasonCategory(str, enum.Enum):
+    SKILLS_MISMATCH = "skills_mismatch"  # 技能不符合
+    EXPERIENCE_INSUFFICIENT = "experience_insufficient"  # 经验不足
+    EDUCATION_MISMATCH = "education_mismatch"  # 学历不符
+    SALARY_EXPECTATION = "salary_expectation"  # 薪资期望不符
+    CULTURE_FIT = "culture_fit"  # 文化匹配度低
+    CANDIDATE_WITHDRAW = "candidate_withdraw"  # 候选人放弃
+    OTHER = "other"  # 其他原因
 
 class Resume(Base):
     __tablename__ = "resumes"
@@ -111,7 +124,7 @@ class Resume(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     candidate_name = Column(String)
     contact = Column(String)
-    email = Column(String)
+    email = Column(String, index=True)  # 添加索引用于查重
     position_id = Column(UUID(as_uuid=True), ForeignKey("positions.id"))
     file_path = Column(String)
     raw_text = Column(Text)
@@ -125,10 +138,41 @@ class Resume(Base):
     ai_review = Column(Text)
     hr_review = Column(Text)
     status = Column(Enum(ResumeStatus), default=ResumeStatus.PENDING_SCREENING)
-    stage = Column(String, default="new") # For Kanban: new, screening, interview, offer, hired, rejected
+    stage = Column(String, default="new")  # For Kanban: new, screening, interview, offer, hired, rejected
+    # 淘汰相关字段
+    reject_reason_category = Column(Enum(RejectReasonCategory), nullable=True)
+    reject_reason_detail = Column(Text, nullable=True)
+    rejected_at = Column(DateTime, nullable=True)
+    rejected_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
     position = relationship("Position")
+    rejector = relationship("User", foreign_keys=[rejected_by])
+    department_reviews = relationship("DepartmentReview", back_populates="resume")
+
+class ReviewRecommendation(str, enum.Enum):
+    RECOMMEND = "recommend"  # 推荐
+    NOT_RECOMMEND = "not_recommend"  # 不推荐
+    PENDING = "pending"  # 待定
+
+class DepartmentReview(Base):
+    """用人部门评审记录"""
+    __tablename__ = "department_reviews"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    resume_id = Column(UUID(as_uuid=True), ForeignKey("resumes.id"), nullable=False)
+    reviewer_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    technical_score = Column(Integer)  # 技术评分 1-10
+    experience_score = Column(Integer)  # 经验评分 1-10
+    overall_score = Column(Integer)  # 综合评分 1-10
+    recommendation = Column(String(20), nullable=True)  # 改用 String 类型避免枚举问题
+    comment = Column(Text)  # 详细评价
+    is_completed = Column(Boolean, default=False)  # 是否已完成评审
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    resume = relationship("Resume", back_populates="department_reviews")
+    reviewer = relationship("User")
 
 class InterviewResult(str, enum.Enum):
     PENDING = "pending"

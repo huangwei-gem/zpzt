@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Button, Space, message, Tag, Modal, Tooltip, Typography, Form, Select, Upload, Input, DatePicker, InputNumber, Card } from 'antd';
-import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, UndoOutlined, AppstoreOutlined, BarsOutlined } from '@ant-design/icons';
+import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, UndoOutlined, AppstoreOutlined, BarsOutlined, SolutionOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useNavigate } from 'react-router-dom';
 
@@ -36,7 +36,12 @@ const ResumesList: React.FC = () => {
       const params: any = {};
       if (searchName) params.candidate_name = searchName;
       if (searchStatus) params.status = searchStatus;
-      
+
+      // 如果是面试官，只显示被指派给自己的简历
+      if (user?.role === 'interviewer') {
+        params.reviewer_id = user.id;
+      }
+
       const res = await request.get('/resumes', { params });
       setData(res);
     } catch (error) {
@@ -314,7 +319,11 @@ const ResumesList: React.FC = () => {
         switch(status) {
           case 'pending_screening': color = 'processing'; text = '解析中'; break;
           case 'pending_review': color = 'warning'; text = '待评审'; break;
+          case 'pending_dept_review': color = 'cyan'; text = '待部门评审'; break;
+          case 'pending_hr_decision': color = 'purple'; text = '待HR决策'; break;
+          case 'auto_rejected_pending_review': color = 'orange'; text = 'AI建议淘汰'; break;
           case 'pending_interview': color = 'geekblue'; text = '待面试'; break;
+          case 'waitlist': color = 'gold'; text = '备选'; break;
           case 'completed': color = 'success'; text = '已完成'; break;
           case 'rejected': color = 'error'; text = '已淘汰'; break;
           default: break;
@@ -325,42 +334,67 @@ const ResumesList: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      render: (_, record: any) => (
-        <Space size="small">
-          <Tooltip title="查看详情">
-            <Button type="text" icon={<EyeOutlined style={{ color: '#3B82F6' }} />} onClick={() => navigate(`/resumes/${record.id}`)} />
-          </Tooltip>
-          {/* Only Admin and HR can schedule interviews */}
-          {(user?.role === 'admin' || user?.role === 'hr') && (
-            <Tooltip title="安排面试">
-              <Button type="text" icon={<TeamOutlined style={{ color: '#10B981' }} />} onClick={() => handleCreateInterviewClick(record)} disabled={record.status === 'rejected'} />
+      render: (_, record: any) => {
+        // 面试官只能查看和评审
+        if (user?.role === 'interviewer') {
+          return (
+            <Space size="small">
+              <Button type="primary" icon={<EyeOutlined />} onClick={() => navigate(`/resumes/${record.id}`)}>
+                查看并评审
+              </Button>
+            </Space>
+          );
+        }
+
+        // HR和管理员的操作
+        // 只有初审通过（pending_interview）才能安排面试
+        const canScheduleInterview = record.status === 'pending_interview';
+        // 可以进行评审操作的状态
+        const canReview = ['pending_review', 'pending_dept_review', 'pending_hr_decision', 'auto_rejected_pending_review'].includes(record.status);
+
+        return (
+          <Space size="small">
+            <Tooltip title="查看详情">
+              <Button type="text" icon={<EyeOutlined style={{ color: '#3B82F6' }} />} onClick={() => navigate(`/resumes/${record.id}`)} />
             </Tooltip>
-          )}
-          {record.status === 'rejected' && (
-            <Tooltip title="恢复">
-               <Button type="text" icon={<UndoOutlined />} onClick={() => handleRestore(record.id)} />
+            {/* Only Admin and HR can schedule interviews - only after initial review passed */}
+            {(user?.role === 'admin' || user?.role === 'hr') && canScheduleInterview && (
+              <Tooltip title="安排面试">
+                <Button type="text" icon={<TeamOutlined style={{ color: '#10B981' }} />} onClick={() => handleCreateInterviewClick(record)} />
+              </Tooltip>
+            )}
+            {/* 如果可以评审，显示评审入口提示 */}
+            {(user?.role === 'admin' || user?.role === 'hr') && canReview && (
+              <Tooltip title="进入评审">
+                <Button type="text" icon={<SolutionOutlined style={{ color: '#8B5CF6' }} />} onClick={() => navigate(`/resumes/${record.id}`)} />
+              </Tooltip>
+            )}
+            {record.status === 'rejected' && (
+              <Tooltip title="恢复">
+                 <Button type="text" icon={<UndoOutlined />} onClick={() => handleRestore(record.id)} />
+              </Tooltip>
+            )}
+            {(user?.role === 'admin' || user?.role === 'hr') && (
+              <Tooltip title="重新解析">
+                <Button
+                  type="text"
+                  icon={<ReloadOutlined />}
+                  onClick={() => handleReparse(record)}
+                  disabled={record?.parse_status === 'processing'}
+                />
+              </Tooltip>
+            )}
+            {record.status !== 'rejected' && record.status !== 'completed' && (
+              <Tooltip title="淘汰">
+                 <Button type="text" danger icon={<CloseCircleOutlined />} onClick={() => handleReject(record.id)} />
+              </Tooltip>
+            )}
+            <Tooltip title="删除">
+              <Button type="text" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)} />
             </Tooltip>
-          )}
-          {(user?.role === 'admin' || user?.role === 'hr') && (
-            <Tooltip title="重新解析">
-              <Button
-                type="text"
-                icon={<ReloadOutlined />}
-                onClick={() => handleReparse(record)}
-                disabled={record?.parse_status === 'processing'}
-              />
-            </Tooltip>
-          )}
-          {record.status !== 'rejected' && record.status !== 'completed' && (
-            <Tooltip title="淘汰">
-               <Button type="text" danger icon={<CloseCircleOutlined />} onClick={() => handleReject(record.id)} />
-            </Tooltip>
-          )}
-          <Tooltip title="删除">
-            <Button type="text" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)} />
-          </Tooltip>
-        </Space>
-      ),
+          </Space>
+        );
+      },
     },
   ];
 
@@ -368,52 +402,69 @@ const ResumesList: React.FC = () => {
     <div>
       <div style={{ marginBottom: 32, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div>
-          <Title level={2} style={{ margin: 0, fontWeight: 700 }}>简历管理</Title>
-          <Text type="secondary">管理候选人简历及面试流程</Text>
+          <Title level={2} style={{ margin: 0, fontWeight: 700 }}>
+            {user?.role === 'interviewer' ? '我的待评审' : '简历管理'}
+          </Title>
+          <Text type="secondary">
+            {user?.role === 'interviewer' ? '被指派给您的待评审简历' : '管理候选人简历及面试流程'}
+          </Text>
         </div>
         <Space>
-          <Tooltip title="看板视图">
-            <Button icon={<AppstoreOutlined />} onClick={() => navigate('/resumes/kanban')} />
-          </Tooltip>
-          <Button icon={<ReloadOutlined />} onClick={fetchResumes}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleUploadClick} size="large" style={{ borderRadius: '8px' }}>上传简历</Button>
+          {user?.role !== 'interviewer' && (
+            <>
+              <Tooltip title="看板视图">
+                <Button icon={<AppstoreOutlined />} onClick={() => navigate('/resumes/kanban')} />
+              </Tooltip>
+              <Button icon={<ReloadOutlined />} onClick={fetchResumes}>刷新</Button>
+              <Button type="primary" icon={<PlusOutlined />} onClick={handleUploadClick} size="large" style={{ borderRadius: '8px' }}>上传简历</Button>
+            </>
+          )}
+          {user?.role === 'interviewer' && (
+            <Button icon={<ReloadOutlined />} onClick={fetchResumes}>刷新</Button>
+          )}
         </Space>
       </div>
 
-      <Card style={{ marginBottom: 24, borderRadius: '8px' }} bodyStyle={{ padding: '24px' }}>
-        <Form layout="inline">
-          <Form.Item label="候选人">
-            <Input 
-              placeholder="请输入姓名" 
-              value={searchName} 
-              onChange={e => setSearchName(e.target.value)}
-              style={{ width: 200 }}
-              allowClear
-            />
-          </Form.Item>
-          <Form.Item label="状态">
-            <Select 
-              placeholder="请选择状态" 
-              value={searchStatus} 
-              onChange={val => setSearchStatus(val)}
-              style={{ width: 150 }}
-              allowClear
-            >
-              <Select.Option value="pending_screening">解析中</Select.Option>
-              <Select.Option value="pending_review">待评审</Select.Option>
-              <Select.Option value="pending_interview">待面试</Select.Option>
-              <Select.Option value="completed">已完成</Select.Option>
-              <Select.Option value="rejected">已淘汰</Select.Option>
-            </Select>
-          </Form.Item>
-          <Form.Item>
-            <Space>
-              <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>搜索</Button>
-              <Button onClick={handleReset}>重置</Button>
-            </Space>
-          </Form.Item>
-        </Form>
-      </Card>
+      {user?.role !== 'interviewer' && (
+        <Card style={{ marginBottom: 24, borderRadius: '8px' }} bodyStyle={{ padding: '24px' }}>
+          <Form layout="inline">
+            <Form.Item label="候选人">
+              <Input
+                placeholder="请输入姓名"
+                value={searchName}
+                onChange={e => setSearchName(e.target.value)}
+                style={{ width: 200 }}
+                allowClear
+              />
+            </Form.Item>
+            <Form.Item label="状态">
+              <Select
+                placeholder="请选择状态"
+                value={searchStatus}
+                onChange={val => setSearchStatus(val)}
+                style={{ width: 150 }}
+                allowClear
+              >
+                <Select.Option value="pending_screening">解析中</Select.Option>
+                <Select.Option value="pending_review">待评审</Select.Option>
+                <Select.Option value="pending_dept_review">待部门评审</Select.Option>
+                <Select.Option value="pending_hr_decision">待HR决策</Select.Option>
+                <Select.Option value="auto_rejected_pending_review">AI建议淘汰</Select.Option>
+                <Select.Option value="pending_interview">待面试</Select.Option>
+                <Select.Option value="waitlist">备选</Select.Option>
+                <Select.Option value="completed">已完成</Select.Option>
+                <Select.Option value="rejected">已淘汰</Select.Option>
+              </Select>
+            </Form.Item>
+            <Form.Item>
+              <Space>
+                <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>搜索</Button>
+                <Button onClick={handleReset}>重置</Button>
+              </Space>
+            </Form.Item>
+          </Form>
+        </Card>
+      )}
 
       <Table 
         columns={columns} 

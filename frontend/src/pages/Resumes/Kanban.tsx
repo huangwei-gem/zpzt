@@ -12,18 +12,24 @@ const { Title, Text } = Typography;
 const STAGES = {
   new: '新简历',
   screening: '筛选中',
+  dept_review: '部门评审',
+  hr_decision: 'HR决策',
   interview: '面试中',
   offer: '待发Offer',
   hired: '已录用',
+  waitlist: '备选池',
   rejected: '已淘汰'
 };
 
 const STAGE_COLORS = {
   new: 'blue',
   screening: 'cyan',
+  dept_review: 'geekblue',
+  hr_decision: 'purple',
   interview: 'geekblue',
   offer: 'purple',
   hired: 'green',
+  waitlist: 'gold',
   rejected: 'red'
 };
 
@@ -108,9 +114,12 @@ const KanbanBoard: React.FC = () => {
   const [items, setItems] = useState<Record<string, any[]>>({
     new: [],
     screening: [],
+    dept_review: [],
+    hr_decision: [],
     interview: [],
     offer: [],
     hired: [],
+    waitlist: [],
     rejected: []
   });
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -126,9 +135,9 @@ const KanbanBoard: React.FC = () => {
       const res = await request.get('/resumes/kanban');
       // Group by stage
       const grouped: Record<string, any[]> = {
-        new: [], screening: [], interview: [], offer: [], hired: [], rejected: []
+        new: [], screening: [], dept_review: [], hr_decision: [], interview: [], offer: [], hired: [], waitlist: [], rejected: []
       };
-      
+
       (res as any[]).forEach(r => {
         const stage = r.stage || 'new';
         if (grouped[stage]) {

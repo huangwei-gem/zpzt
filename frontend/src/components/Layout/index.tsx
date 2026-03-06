@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layout, Menu, Button, Avatar, Space, Dropdown, theme } from 'antd';
+import { Layout, Menu, Button, Avatar, Space, Dropdown, theme, Badge } from 'antd';
 import {
   DashboardOutlined,
   UserOutlined,
@@ -9,7 +9,8 @@ import {
   CodeOutlined,
   LogoutOutlined,
   BellOutlined,
-  SettingOutlined
+  SettingOutlined,
+  SolutionOutlined
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
@@ -30,6 +31,7 @@ const AppLayout: React.FC = () => {
     navigate('/login');
   };
 
+  // 基础菜单项
   const menuItems = [
     {
       key: '/dashboard',
@@ -40,16 +42,19 @@ const AppLayout: React.FC = () => {
       key: '/positions',
       icon: <UserOutlined />,
       label: '岗位管理',
+      roles: ['admin', 'hr'],
     },
     {
       key: '/question-banks',
       icon: <BankOutlined />,
       label: '题库管理',
+      roles: ['admin', 'hr'],
     },
     {
       key: '/resumes',
       icon: <FileTextOutlined />,
       label: '简历管理',
+      // 所有角色可见，但面试官只能看到被指派的简历
     },
     {
       key: '/interviews',
@@ -60,37 +65,20 @@ const AppLayout: React.FC = () => {
       key: '/coding-tests',
       icon: <CodeOutlined />,
       label: '笔试管理',
+      roles: ['admin', 'hr'],
     },
     {
       key: '/settings/users',
       icon: <SettingOutlined />,
       label: '用户管理',
-      // Only show for Admin (and maybe HR)
-      // We can hide it via CSS or conditionally render, but here we just add it to the list
-      // Better to filter based on user role
+      roles: ['admin'],
     },
   ];
 
-  // Filter menu items based on role
+  // 根据角色过滤菜单
   const filteredMenuItems = menuItems.filter(item => {
-    // Admin sees everything
-    if (role === 'admin') return true;
-    
-    // Interviewer sees only Dashboard and Interviews
-    if (role === 'interviewer') {
-        return ['/dashboard', '/interviews'].includes(item.key);
-    }
-    
-    // HR sees everything except User Management (Admin only)
-    if (role === 'hr') {
-        return !['/settings/users', '/settings/system'].includes(item.key);
-    }
-
-    // Default fallback (e.g. unknown role)
-    if (['/settings/users', '/settings/system'].includes(item.key)) {
-       return false;
-    }
-    return true;
+    if (!item.roles) return true; // 没有角色限制的菜单，所有人可见
+    return item.roles.includes(role);
   });
 
   const pageTitle =

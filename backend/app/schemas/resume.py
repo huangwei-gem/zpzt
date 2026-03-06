@@ -2,7 +2,7 @@ from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
 from typing import Optional, List, Dict, Any
 from uuid import UUID
 from datetime import datetime
-from app.models.models import ResumeStatus, ScreeningResult
+from app.models.models import ResumeStatus, ScreeningResult, RejectReasonCategory, ReviewRecommendation
 from app.schemas.position import PositionResponse
 
 class ResumeBase(BaseModel):
@@ -31,6 +31,9 @@ class ResumeUpdate(BaseModel):
     contact: Optional[str] = None
     email: Optional[EmailStr] = None
     stage: Optional[str] = None
+    # 淘汰相关字段
+    reject_reason_category: Optional[RejectReasonCategory] = None
+    reject_reason_detail: Optional[str] = None
 
     @field_validator("email", mode="before")
     @classmethod
@@ -54,7 +57,110 @@ class ResumeResponse(ResumeBase):
     hr_review: Optional[str] = None
     status: ResumeStatus
     stage: Optional[str] = "new"
+    # 淘汰相关字段
+    reject_reason_category: Optional[RejectReasonCategory] = None
+    reject_reason_detail: Optional[str] = None
+    rejected_at: Optional[datetime] = None
+    rejected_by: Optional[UUID] = None
     created_at: datetime
     position: Optional[PositionResponse] = None
-    
+    department_reviews: Optional[List["DepartmentReviewResponse"]] = None
+
     model_config = ConfigDict(from_attributes=True)
+
+
+# 部门评审相关 Schema
+class DepartmentReviewBase(BaseModel):
+    technical_score: Optional[int] = None  # 技术评分 1-10
+    experience_score: Optional[int] = None  # 经验评分 1-10
+    overall_score: Optional[int] = None  # 综合评分 1-10
+    recommendation: Optional[ReviewRecommendation] = None
+    comment: Optional[str] = None
+
+
+class DepartmentReviewCreate(DepartmentReviewBase):
+    pass
+
+
+class DepartmentReviewUpdate(BaseModel):
+    technical_score: Optional[int] = None
+    experience_score: Optional[int] = None
+    overall_score: Optional[int] = None
+    recommendation: Optional[ReviewRecommendation] = None
+    comment: Optional[str] = None
+
+
+class DepartmentReviewResponse(DepartmentReviewBase):
+    id: UUID
+    resume_id: UUID
+    reviewer_id: UUID
+    is_completed: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    reviewer_name: Optional[str] = None  # 评审人姓名
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# HR决策相关 Schema
+class HRDecisionCreate(BaseModel):
+    hr_id: UUID  # HR用户ID
+    decision: ResumeStatus  # REJECTED, WAITLIST, PENDING_INTERVIEW 等
+    reject_reason_category: Optional[RejectReasonCategory] = None
+    reject_reason_detail: Optional[str] = None
+    hr_comment: Optional[str] = None
+
+
+class HRDecisionResponse(BaseModel):
+    resume_id: UUID
+    decision: ResumeStatus
+    reject_reason_category: Optional[RejectReasonCategory] = None
+    reject_reason_detail: Optional[str] = None
+    hr_comment: Optional[str] = None
+    decided_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# 简历查重检查
+class DuplicateCheckRequest(BaseModel):
+    email: Optional[EmailStr] = None
+    contact: Optional[str] = None
+    position_id: UUID
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+
+class DuplicateCheckResponse(BaseModel):
+    is_duplicate: bool
+    existing_resume: Optional[ResumeResponse] = None
+    message: Optional[str] = None
+
+
+# 部门评审聚合报告
+class DepartmentReviewSummary(BaseModel):
+    resume_id: UUID
+    total_reviewers: int
+    completed_reviewers: int
+    avg_technical_score: Optional[float] = None
+    avg_experience_score: Optional[float] = None
+    avg_overall_score: Optional[float] = None
+    recommend_count: int = 0
+    not_recommend_count: int = 0
+    pending_count: int = 0
+    recommend_ratio: float = 0.0
+    comments: List[str] = []
+    reviews: List[DepartmentReviewResponse] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Resolve forward references
+ResumeResponse.model_rebuild()
