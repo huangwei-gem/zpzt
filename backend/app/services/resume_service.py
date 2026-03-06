@@ -209,13 +209,6 @@ def get_resumes(db: Session, skip: int = 0, limit: int = 100, candidate_name: st
 
     return query.offset(skip).limit(limit).all()
 
-def get_resumes_by_stage(db: Session):
-    """
-    Get all resumes grouped by stage for Kanban board
-    """
-    resumes = db.query(Resume).options(joinedload(Resume.position)).all()
-    return resumes
-
 def get_resume(db: Session, resume_id: UUID):
     return db.query(Resume).options(joinedload(Resume.position)).filter(Resume.id == resume_id).first()
 
@@ -559,31 +552,3 @@ def get_resume_with_reviews(db: Session, resume_id: UUID) -> Optional[Resume]:
     ).filter(Resume.id == resume_id).first()
 
     return resume
-
-
-def get_my_pending_reviews(db: Session, reviewer_id: UUID) -> List[Dict[str, Any]]:
-    """
-    获取当前用户待评审的简历列表
-    """
-    reviews = db.query(DepartmentReview).options(
-        joinedload(DepartmentReview.resume).joinedload(Resume.position),
-        joinedload(DepartmentReview.reviewer)
-    ).filter(
-        DepartmentReview.reviewer_id == reviewer_id,
-        DepartmentReview.is_completed == False
-    ).all()
-
-    result = []
-    for review in reviews:
-        result.append({
-            'review_id': review.id,
-            'resume_id': review.resume_id,
-            'candidate_name': review.resume.candidate_name if review.resume else None,
-            'position_title': review.resume.position.title if review.resume and review.resume.position else None,
-            'match_score': review.resume.match_score if review.resume else None,
-            'status': review.resume.status if review.resume else None,
-            'created_at': review.created_at,
-            'resume': review.resume
-        })
-
-    return result

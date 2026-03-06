@@ -10,8 +10,6 @@ import QuestionBankUpload from '../pages/QuestionBanks/Upload';
 import ResumesList from '../pages/Resumes/List';
 import ResumeUpload from '../pages/Resumes/Upload';
 import ResumeDetail from '../pages/Resumes/Detail';
-import KanbanBoard from '../pages/Resumes/Kanban';
-import MyReviews from '../pages/Reviews/MyReviews';
 import InterviewsList from '../pages/Interviews/List';
 import InterviewScore from '../pages/Interviews/Score';
 import InterviewResultPage from '../pages/Interviews/Result';
@@ -92,20 +90,12 @@ const router = createBrowserRouter([
         element: <ResumesList />,
       },
       {
-        path: 'resumes/kanban',
-        element: <KanbanBoard />,
-      },
-      {
         path: 'resumes/upload',
         element: <ResumeUpload />,
       },
       {
         path: 'resumes/:id',
         element: <ResumeDetail />,
-      },
-      {
-        path: 'my-reviews',
-        element: <MyReviews />,
       },
       {
         path: 'interviews',

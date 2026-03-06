@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Button, Space, message, Tag, Modal, Tooltip, Typography, Form, Select, Upload, Input, DatePicker, InputNumber, Card } from 'antd';
-import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, UndoOutlined, AppstoreOutlined, BarsOutlined, SolutionOutlined } from '@ant-design/icons';
+import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, UndoOutlined, SolutionOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useNavigate } from 'react-router-dom';
 
@@ -412,9 +412,6 @@ const ResumesList: React.FC = () => {
         <Space>
           {user?.role !== 'interviewer' && (
             <>
-              <Tooltip title="看板视图">
-                <Button icon={<AppstoreOutlined />} onClick={() => navigate('/resumes/kanban')} />
-              </Tooltip>
               <Button icon={<ReloadOutlined />} onClick={fetchResumes}>刷新</Button>
               <Button type="primary" icon={<PlusOutlined />} onClick={handleUploadClick} size="large" style={{ borderRadius: '8px' }}>上传简历</Button>
             </>

@@ -9,10 +9,10 @@ from app.schemas.resume import (
 )
 from app.services.resume_service import (
     upload_resume, get_resumes, get_resume, update_resume, delete_resume,
-    batch_upload_resumes, get_resumes_by_stage, reparse_resume,
+    batch_upload_resumes, reparse_resume,
     check_duplicate_resume, create_department_review, get_department_reviews,
     complete_department_review, aggregate_department_reviews, submit_hr_decision,
-    confirm_rejection, override_rejection, get_resume_with_reviews, get_my_pending_reviews
+    confirm_rejection, override_rejection, get_resume_with_reviews
 )
 from app.models.models import ResumeStatus, RejectReasonCategory
 from typing import List, Dict, Any, Optional
@@ -23,24 +23,7 @@ router = APIRouter(
     tags=["resumes"]
 )
 
-# ==================== 看板与列表 ====================
-
-@router.get("/kanban", response_model=List[ResumeResponse])
-def get_resumes_kanban_route(db: Session = Depends(get_db)):
-    return get_resumes_by_stage(db)
-
-# ==================== 我的待评审 ====================
-# 注意：此路由必须在 /{resume_id} 之前，否则会被动态路由拦截
-
-@router.get("/my-reviews")
-def get_my_reviews_route(
-    reviewer_id: UUID,  # TODO: 从认证中间件获取
-    db: Session = Depends(get_db)
-):
-    """
-    获取当前用户待评审的简历列表
-    """
-    return get_my_pending_reviews(db, reviewer_id)
+# ==================== 简历列表 ====================
 
 @router.get("", response_model=List[ResumeResponse])
 def get_resumes_route(
