@@ -31,18 +31,18 @@ const InterviewScore: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Audio recording state
-  const [recording, setRecording] = useState(false);
-  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
-  const [transcripts, setTranscripts] = useState<Record<string, string>>({});
-
   // 整场面试录音状态
   const [fullRecording, setFullRecording] = useState(false);
   const [fullRecordingTime, setFullRecordingTime] = useState(0);
   const [fullRecordingTimer, setFullRecordingTimer] = useState<ReturnType<typeof setInterval> | null>(null);
   const [fullRecordingBlob, setFullRecordingBlob] = useState<Blob | null>(null);
+  const [fullMediaRecorder, setFullMediaRecorder] = useState<MediaRecorder | null>(null);
   const [uploadingRecording, setUploadingRecording] = useState(false);
+  const [recordingUploaded, setRecordingUploaded] = useState(false); // 是否已上传
   const [fullTranscript, setFullTranscript] = useState<string>('');
+  const [transcriptSegments, setTranscriptSegments] = useState<any[]>([]);
+  const [realtimeTranscript, setRealtimeTranscript] = useState<string>('');
+  const [recognition, setRecognition] = useState<any>(null); // Web Speech API
 
   // 直接填写评价状态
   const [directEvaluation, setDirectEvaluation] = useState('');
@@ -249,54 +249,6 @@ const InterviewScore: React.FC = () => {
     }
   };
 
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      const chunks: Blob[] = [];
-      
-      recorder.ondataavailable = (e) => chunks.push(e.data);
-      recorder.onstop = async () => {
-        const blob = new Blob(chunks, { type: 'audio/webm' });
-        const file = new File([blob], `recording-${currentQuestionIndex}.webm`, { type: 'audio/webm' });
-        
-        // Upload audio
-        const formData = new FormData();
-        formData.append('file', file);
-        
-        try {
-            message.loading({ content: '正在转写音频...', key: 'transcribing' });
-            const res = await request.post(`/interviews/${id}/audio/${currentQuestionIndex}`, formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
-            }) as any;
-            
-            if (res.transcript) {
-                setTranscripts(prev => ({ ...prev, [currentQuestionIndex]: res.transcript }));
-                message.success({ content: '转写完成', key: 'transcribing' });
-            } else {
-                message.warning({ content: '未识别到有效语音', key: 'transcribing' });
-            }
-        } catch (e) {
-            message.error({ content: '音频上传或转写失败', key: 'transcribing' });
-        }
-      };
-      
-      recorder.start();
-      setMediaRecorder(recorder);
-      setRecording(true);
-    } catch (err) {
-      message.error('无法访问麦克风');
-    }
-  };
-  
-  const stopRecording = () => {
-    if (mediaRecorder && recording) {
-        mediaRecorder.stop();
-        setRecording(false);
-        mediaRecorder.stream.getTracks().forEach((track: any) => track.stop());
-    }
-  };
-
   const handleAddQuestionClick = () => {
     addForm.resetFields();
     addForm.setFieldsValue({
@@ -376,7 +328,6 @@ const InterviewScore: React.FC = () => {
       // 调整分数和评语的索引
       const newScores: Record<string, number> = {};
       const newComments: Record<string, string> = {};
-      const newTranscripts: Record<string, string> = {};
       
       Object.keys(scores).forEach(key => {
         const idx = parseInt(key);
@@ -395,15 +346,6 @@ const InterviewScore: React.FC = () => {
           newComments[String(idx - 1)] = comments[key];
         }
       });
-      
-      Object.keys(transcripts).forEach(key => {
-        const idx = parseInt(key);
-        if (idx < index) {
-          newTranscripts[key] = transcripts[key];
-        } else if (idx > index) {
-          newTranscripts[String(idx - 1)] = transcripts[key];
-        }
-      });
 
       // Sync to backend
       await request.put(`/interviews/${id}/questions`, newQuestions);
@@ -419,7 +361,6 @@ const InterviewScore: React.FC = () => {
       setQuestions(newQuestions);
       setScores(newScores);
       setComments(newComments);
-      setTranscripts(newTranscripts);
       message.success('删除成功');
 
       // Adjust current index if needed
@@ -431,11 +372,11 @@ const InterviewScore: React.FC = () => {
     }
   };
 
-  // 整场面试录音功能
+  // 整场面试录音功能（带实时转写）
   const startFullRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       const chunks: BlobPart[] = [];
 
       recorder.ondataavailable = (e) => {
@@ -450,37 +391,77 @@ const InterviewScore: React.FC = () => {
         stream.getTracks().forEach(track => track.stop());
       };
 
-      recorder.start();
-      setMediaRecorder(recorder);
+      recorder.start(1000);
+      setFullMediaRecorder(recorder);
       setFullRecording(true);
       setFullRecordingTime(0);
+      setRealtimeTranscript('');
+      setRecordingUploaded(false);
 
-      // 开始计时
+      // 启动计时器
       const timer = setInterval(() => {
         setFullRecordingTime(prev => prev + 1);
       }, 1000);
       setFullRecordingTimer(timer);
 
-      message.success('开始录制整场面试');
+      // 启动实时语音识别（Web Speech API）
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const recog = new SpeechRecognition();
+        recog.continuous = true;
+        recog.interimResults = true;
+        recog.lang = 'zh-CN';
+        
+        let finalTranscript = '';
+        recog.onresult = (event: any) => {
+          let interimTranscript = '';
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              finalTranscript += transcript;
+            } else {
+              interimTranscript += transcript;
+            }
+          }
+          setRealtimeTranscript(finalTranscript + interimTranscript);
+        };
+        
+        recog.onerror = (event: any) => {
+          console.log('Speech recognition error:', event.error);
+        };
+        
+        recog.start();
+        setRecognition(recog);
+      }
+
+      message.success('开始录制面试');
     } catch (error) {
       message.error('无法访问麦克风，请检查权限设置');
     }
   };
 
   const stopFullRecording = () => {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.stop();
+    if (fullMediaRecorder && fullMediaRecorder.state !== 'inactive') {
+      fullMediaRecorder.stop();
       setFullRecording(false);
+      
       if (fullRecordingTimer) {
         clearInterval(fullRecordingTimer);
         setFullRecordingTimer(null);
       }
-      message.success('录音已保存');
+      
+      // 停止语音识别
+      if (recognition) {
+        recognition.stop();
+        setRecognition(null);
+      }
+      
+      message.success('录音已结束，请手动上传');
     }
   };
 
   const uploadFullRecording = async () => {
-    if (!fullRecordingBlob || !id) return;
+    if (!fullRecordingBlob || !id || recordingUploaded) return;
 
     setUploadingRecording(true);
     try {
@@ -489,12 +470,21 @@ const InterviewScore: React.FC = () => {
 
       const response = await request.post(`/interviews/${id}/full-audio`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
-      });
+      }) as any;
 
       if (response.transcript) {
-        setFullTranscript(response.transcript);
+        // transcript 可能是字符串或对象
+        const transcriptText = typeof response.transcript === 'string' 
+          ? response.transcript 
+          : (response.transcript.text || '');
+        setFullTranscript(response.formatted_transcript || transcriptText);
+        if (response.segments && Array.isArray(response.segments)) {
+          setTranscriptSegments(response.segments);
+        }
+        setRecordingUploaded(true);
         message.success('录音已上传，AI正在分析...');
       } else {
+        setRecordingUploaded(true);
         message.success('录音已上传');
       }
     } catch (error) {
@@ -516,7 +506,8 @@ const InterviewScore: React.FC = () => {
       const panelMembers = interview?.panel_members || [];
       const isMultiInterviewer = panelMembers.length > 1;
       
-      if (fullRecordingBlob && !fullTranscript) {
+      // 如果有录音未上传，先上传录音
+      if (fullRecordingBlob && !recordingUploaded) {
         setUploadingRecording(true);
         const formData = new FormData();
         formData.append('file', fullRecordingBlob, 'full_interview.webm');
@@ -529,6 +520,7 @@ const InterviewScore: React.FC = () => {
         });
 
         setInterview(response);
+        setRecordingUploaded(true);
         
         if (isMultiInterviewer) {
           const updatedInterview = await request.get(`/interviews/${id}`) as any;
@@ -590,6 +582,33 @@ const InterviewScore: React.FC = () => {
 
     try {
       setSubmitting(true);
+      
+      // 如果有录音未上传，先上传录音
+      if (fullRecordingBlob && !recordingUploaded) {
+        setUploadingRecording(true);
+        try {
+          const formData = new FormData();
+          formData.append('file', fullRecordingBlob, 'full_interview.webm');
+          const response = await request.post(`/interviews/${id}/full-audio`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          }) as any;
+          
+          if (response.transcript) {
+            const transcriptText = typeof response.transcript === 'string' 
+              ? response.transcript 
+              : (response.transcript.text || '');
+            setFullTranscript(response.formatted_transcript || transcriptText);
+            if (response.segments && Array.isArray(response.segments)) {
+              setTranscriptSegments(response.segments);
+            }
+          }
+          setRecordingUploaded(true);
+        } catch (e) {
+          console.error('上传录音失败', e);
+        } finally {
+          setUploadingRecording(false);
+        }
+      }
       
       const panelMembers = interview?.panel_members || [];
       const isMultiInterviewer = panelMembers.length > 1;
@@ -825,7 +844,72 @@ const InterviewScore: React.FC = () => {
          <Tooltip title="添加题目">
            <Button icon={<PlusOutlined />} onClick={handleAddQuestionClick} />
          </Tooltip>
+
+         {/* 整场录音按钮 */}
+         {(() => {
+           const panelMembers = interview?.panel_members || [];
+           const myId = user?.id ? String(user.id) : '';
+           const isFirstInterviewer = panelMembers.length === 0 || (panelMembers.length > 0 && String(panelMembers[0]) === myId);
+           
+           if (!isFirstInterviewer && panelMembers.length > 0) return null;
+           
+           if (recordingUploaded) {
+             return (
+               <Tag color="success" icon={<CheckCircleOutlined />}>录音已上传</Tag>
+             );
+           }
+           
+           if (fullRecording) {
+             return (
+               <Button type="primary" danger icon={<AudioOutlined />} onClick={stopFullRecording}>
+                 停止录音 {formatTime(fullRecordingTime)}
+               </Button>
+             );
+           }
+           
+           if (fullRecordingBlob) {
+             return (
+               <Button type="default" icon={<AudioOutlined />} loading={uploadingRecording} onClick={uploadFullRecording}>
+                 上传录音
+               </Button>
+             );
+           }
+           
+           return (
+             <Button icon={<AudioOutlined />} onClick={startFullRecording}>
+               开始录音
+             </Button>
+           );
+         })()}
       </Space>
+  );
+
+  // 实时转写显示栏
+  const realtimeTranscriptBar = (fullRecording || realtimeTranscript) && !recordingUploaded && (
+    <div style={{ 
+      background: fullRecording ? '#FFF7ED' : '#F0FDF4', 
+      padding: '8px 16px', 
+      borderBottom: '1px solid #E2E8F0',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12
+    }}>
+      {fullRecording && (
+        <Tag color="error" style={{ animation: 'pulse 1s infinite' }}>
+          <AudioOutlined /> 录制中 {formatTime(fullRecordingTime)}
+        </Tag>
+      )}
+      <div style={{ 
+        flex: 1, 
+        overflow: 'hidden', 
+        whiteSpace: 'nowrap',
+        textOverflow: 'ellipsis',
+        color: realtimeTranscript ? '#1F2937' : '#9CA3AF',
+        fontSize: 13
+      }}>
+        {realtimeTranscript || '等待语音输入...'}
+      </div>
+    </div>
   );
 
   return (
@@ -858,6 +942,9 @@ const InterviewScore: React.FC = () => {
 
       {/* Right: Interview Questions & Scoring */}
       <div id="questions-container" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* 实时转写显示栏 */}
+        {realtimeTranscriptBar}
+        
         <div style={{ flexShrink: 0, paddingRight: '4px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
             <Title level={4} style={{ margin: 0 }}>面试题目 & 评分</Title>
@@ -962,7 +1049,8 @@ const InterviewScore: React.FC = () => {
                     <div style={{ marginTop: 12 }}>
                       {(() => {
                         const panelMembers = interview?.panel_members || [];
-                        const isFirstInterviewer = panelMembers.length > 0 && user?.id && panelMembers[0] === user.id;
+                        const myId = user?.id ? String(user.id) : '';
+                        const isFirstInterviewer = panelMembers.length === 0 || (panelMembers.length > 0 && String(panelMembers[0]) === myId);
                         
                         if (!isFirstInterviewer && panelMembers.length > 0) {
                           return (
@@ -1003,11 +1091,6 @@ const InterviewScore: React.FC = () => {
                         );
                       })()}
                     </div>
-                    {fullTranscript && (
-                      <div style={{ marginTop: 12, textAlign: 'left', maxHeight: 100, overflow: 'auto', background: '#f5f5f5', padding: 8, borderRadius: 4 }}>
-                        <Text type="secondary" style={{ fontSize: 12 }}>{fullTranscript}</Text>
-                      </div>
-                    )}
                   </Card>
                 </Col>
 
@@ -1030,6 +1113,31 @@ const InterviewScore: React.FC = () => {
                   </Card>
                 </Col>
               </Row>
+
+              {/* 录音转写结果显示 */}
+              {fullTranscript && (
+                <Card size="small" style={{ marginTop: 16 }} title={<Text strong>录音转写结果</Text>}>
+                  <div style={{ maxHeight: 200, overflow: 'auto' }}>
+                    {transcriptSegments.length > 0 ? (
+                      <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+                        {transcriptSegments.map((seg: any, idx: number) => (
+                          <div key={idx} style={{ marginBottom: 8 }}>
+                            <Tag color={seg.speaker?.includes('1') ? 'blue' : 'green'} style={{ marginRight: 8 }}>
+                              {seg.speaker || `说话人${idx + 1}`}
+                            </Tag>
+                            <Text type="secondary" style={{ fontSize: 11, marginRight: 8 }}>
+                              [{seg.start?.toFixed(1)}s]
+                            </Text>
+                            <Text>{seg.text}</Text>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <Text style={{ whiteSpace: 'pre-wrap' }}>{fullTranscript}</Text>
+                    )}
+                  </div>
+                </Card>
+              )}
 
               {/* 直接填写评价表单 */}
               <div style={{ marginTop: 24 }}>
@@ -1076,36 +1184,6 @@ const InterviewScore: React.FC = () => {
                   </Space>
                   {editingIndex !== currentQuestionIndex && (
                     <Space>
-                      {/* Audio Recorder Button */}
-                      <Tooltip title={transcripts[currentQuestionIndex] ? "重新录制" : "录制候选人回答"}>
-                          <Button 
-                            type={recording ? 'primary' : 'default'} 
-                            danger={recording}
-                            shape="circle"
-                            icon={recording ? <LoadingOutlined /> : <AudioOutlined />}
-                            onClick={recording ? stopRecording : startRecording}
-                          />
-                      </Tooltip>
-                      {transcripts[currentQuestionIndex] && (
-                          <Tooltip title="查看转写内容">
-                             <Popconfirm
-                                title="候选人回答转写"
-                                description={
-                                    <div style={{ maxWidth: 300, maxHeight: 200, overflowY: 'auto' }}>
-                                        {transcripts[currentQuestionIndex]}
-                                    </div>
-                                }
-                                icon={<AudioOutlined style={{ color: '#722ED1' }} />}
-                                showCancel={false}
-                                okText="关闭"
-                             >
-                                <Tag color="purple" style={{ cursor: 'pointer', margin: 0 }}>已转写</Tag>
-                             </Popconfirm>
-                          </Tooltip>
-                      )}
-                      
-                      <Divider type="vertical" />
-                      
                       <Button type="text" icon={<EditOutlined />} onClick={() => handleEdit(currentQuestionIndex)} />
                       <Popconfirm title="确定删除此题吗？" onConfirm={() => handleDelete(currentQuestionIndex)}>
                         <Button type="text" danger icon={<DeleteOutlined />} />
@@ -1189,15 +1267,6 @@ const InterviewScore: React.FC = () => {
                             value={comments[currentQuestionIndex]}
                             onChange={(e) => setComments({...comments, [currentQuestionIndex]: e.target.value})}
                           />
-                          
-                          <div style={{ marginTop: 16 }}>
-                              {transcripts[currentQuestionIndex] && (
-                                  <div style={{ padding: 8, background: '#F3E8FF', borderRadius: 4, border: '1px dashed #D8B4FE' }}>
-                                      <Text type="secondary" style={{ fontSize: 12 }}>候选人回答转写：</Text>
-                                      <Paragraph style={{ margin: 0, color: '#6B21A8' }}>{transcripts[currentQuestionIndex]}</Paragraph>
-                                  </div>
-                              )}
-                          </div>
                           
                         </Col>
                       </Row>

@@ -329,7 +329,8 @@ def upload_audio_route(
         shutil.copyfileobj(file.file, buffer)
         
     # 2. Transcribe
-    transcript = transcribe_audio(file_path)
+    transcript_data = transcribe_audio(file_path)
+    transcript = transcript_data.get("text", "") if isinstance(transcript_data, dict) else str(transcript_data)
     
     # 3. Update DB (InterviewPanel)
     # We need to find or create the panel for this user
@@ -506,13 +507,12 @@ def upload_full_interview_audio(
     current_user: User = Depends(get_current_user)
 ):
     """上传整场面试录音并进行AI分析"""
-    from app.services.audio_service import transcribe_audio
+    from app.services.audio_service import transcribe_audio, format_transcript_for_display
 
     interview = get_interview(db, interview_id)
     if not interview:
         raise HTTPException(status_code=404, detail="Interview not found")
 
-    # 保存音频文件
     upload_dir = f"uploads/full_audio/{interview_id}"
     os.makedirs(upload_dir, exist_ok=True)
 
@@ -523,28 +523,34 @@ def upload_full_interview_audio(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # 转写音频
     try:
-        transcript = transcribe_audio(file_path)
+        transcript_data = transcribe_audio(file_path)
+        transcript_text = transcript_data.get("text", "")
+        formatted_transcript = format_transcript_for_display(transcript_data)
     except Exception as e:
-        transcript = f"转写失败: {str(e)}"
+        transcript_text = f"转写失败: {str(e)}"
+        formatted_transcript = transcript_text
+        transcript_data = {"text": transcript_text, "segments": []}
 
-    # 保存到数据库
     interview.audio_records = {"full_interview": file_path}
-    interview.transcripts = {"full_interview": transcript}
+    interview.transcripts = {
+        "full_interview": transcript_text,
+        "full_interview_data": transcript_data
+    }
     db.commit()
 
-    # 如果有转写内容，后台生成评价
-    if transcript and background_tasks:
+    if transcript_text and background_tasks:
         background_tasks.add_task(
             generate_evaluation_from_transcript,
             interview_id,
-            transcript
+            transcript_text
         )
 
     return {
         "message": "上传成功",
-        "transcript": transcript
+        "transcript": transcript_text,
+        "formatted_transcript": formatted_transcript,
+        "segments": transcript_data.get("segments", [])
     }
 
 
@@ -562,7 +568,12 @@ def submit_direct_evaluation(
         raise HTTPException(status_code=404, detail="Interview not found")
 
     transcripts = interview.transcripts or {}
-    full_transcript = transcripts.get("full_interview") or evaluation_data.transcript
+    full_transcript_data = transcripts.get("full_interview", "")
+    # 处理 transcript 可能是对象或字符串的情况
+    if isinstance(full_transcript_data, dict):
+        full_transcript = full_transcript_data.get("text", "")
+    else:
+        full_transcript = full_transcript_data or evaluation_data.transcript
 
     panel_members = interview.panel_members or []
     is_multi_interviewer = len(panel_members) > 1
@@ -690,12 +701,17 @@ def submit_direct_evaluation_with_audio(
         shutil.copyfileobj(file.file, buffer)
 
     try:
-        transcript = transcribe_audio(file_path)
+        transcript_data = transcribe_audio(file_path)
+        transcript = transcript_data.get("text", "") if isinstance(transcript_data, dict) else str(transcript_data)
     except Exception as e:
         transcript = f"转写失败: {str(e)}"
+        transcript_data = {"text": transcript, "segments": []}
 
     interview.audio_records = {"full_interview": file_path}
-    interview.transcripts = {"full_interview": transcript}
+    interview.transcripts = {
+        "full_interview": transcript,
+        "full_interview_data": transcript_data
+    }
 
     panel_members = interview.panel_members or []
     is_multi_interviewer = len(panel_members) > 1

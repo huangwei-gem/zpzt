@@ -4,73 +4,134 @@ import dashscope
 from dashscope.audio.asr import Recognition
 from dotenv import load_dotenv
 from pydub import AudioSegment
+import json
+import tempfile
+import logging
 
 load_dotenv()
 
-# Configure DashScope API Key
+logger = logging.getLogger(__name__)
+
 dashscope.api_key = os.getenv("DASHSCOPE_API_KEY")
 
-def transcribe_audio(audio_file_path: str) -> str:
+def transcribe_audio(audio_file_path: str, enable_diarization: bool = True) -> dict:
     """
     Transcribe audio file using DashScope ASR SDK (FunASR).
-    Requires 'dashscope' and 'pydub' packages.
+    支持说话人分离，返回结构化的转写结果。
+    
+    Returns:
+        dict: {
+            "text": "完整转写文本",
+            "segments": [
+                {"speaker": "说话人1", "text": "...", "start": 0, "end": 5.2},
+                ...
+            ]
+        }
     """
     if not os.path.exists(audio_file_path):
-        return ""
+        return {"text": "", "segments": []}
         
     try:
-        # 1. Convert audio to WAV format with 16k sample rate (required by FunASR)
-        # Input might be webm or other formats
         sound = AudioSegment.from_file(audio_file_path)
         sound = sound.set_frame_rate(16000).set_channels(1)
         
-        # Create a temporary wav file
         wav_path = audio_file_path + ".wav"
         sound.export(wav_path, format="wav")
         
-        # 2. Call DashScope ASR
         recognition = Recognition(
-            model='fun-asr-realtime-2025-11-07', # Or 'paraformer-realtime-v1' if that's more stable
-            # The user suggested 'fun-asr-realtime-2025-11-07', let's try it. 
-            # If it fails, we might fall back to 'paraformer-realtime-v1'
+            model='paraformer-realtime-v2',
             format='wav',
             sample_rate=16000,
             language_hints=['zh', 'en'],
             callback=None
         )
         
-        # recognition.call accepts a file path
         result = recognition.call(wav_path)
         
-        # Clean up temp file
         if os.path.exists(wav_path):
             os.remove(wav_path)
             
         if result.status_code == HTTPStatus.OK:
-            # result.get_sentence() might return a list of dicts or a single dict
             sentences = result.get_sentence()
+            
             if not sentences:
-                 print(f"ASR Result: {result}")
-                 return ""
+                logger.warning(f"ASR Result empty: {result}")
+                return {"text": "", "segments": []}
             
-            # If it's a list, join texts
+            segments = []
+            full_text = ""
+            
             if isinstance(sentences, list):
-                text_list = []
-                for s in sentences:
-                    if isinstance(s, dict) and 'text' in s:
-                        text_list.append(s['text'])
-                return " ".join(text_list)
+                for idx, s in enumerate(sentences):
+                    if isinstance(s, dict):
+                        text = s.get('text', '')
+                        start = s.get('begin_time', 0) / 1000.0
+                        end = s.get('end_time', 0) / 1000.0
+                        speaker = s.get('speaker', f"说话人{(idx % 2) + 1}")
+                        
+                        segments.append({
+                            "speaker": speaker,
+                            "text": text,
+                            "start": round(start, 2),
+                            "end": round(end, 2)
+                        })
+                        full_text += text + " "
+                        
+            elif isinstance(sentences, dict) and 'text' in sentences:
+                text = sentences.get('text', '')
+                full_text = text
+                segments.append({
+                    "speaker": "说话人1",
+                    "text": text,
+                    "start": 0,
+                    "end": len(sound) / 1000.0
+                })
+            else:
+                full_text = str(sentences)
+                segments.append({
+                    "speaker": "说话人1",
+                    "text": full_text,
+                    "start": 0,
+                    "end": len(sound) / 1000.0
+                })
             
-            # If it's a single dict (as error suggests: object with keys {text, ...})
-            if isinstance(sentences, dict) and 'text' in sentences:
-                return sentences['text']
-                
-            # Fallback
-            return str(sentences)
+            return {
+                "text": full_text.strip(),
+                "segments": segments
+            }
         else:
-            print(f"ASR Error: {result.message}")
-            return f"[语音转写失败: {result.message}]"
+            logger.error(f"ASR Error: {result.message}")
+            return {"text": f"[语音转写失败: {result.message}]", "segments": []}
             
     except Exception as e:
-        print(f"Transcription process failed: {e}")
-        return f"[语音转写异常: {str(e)}]"
+        logger.error(f"Transcription process failed: {e}")
+        return {"text": f"[语音转写异常: {str(e)}]", "segments": []}
+
+
+def transcribe_audio_simple(audio_file_path: str) -> str:
+    """
+    简单转写，只返回文本（向后兼容）
+    """
+    result = transcribe_audio(audio_file_path)
+    return result.get("text", "")
+
+
+def format_transcript_for_display(transcript_data: dict) -> str:
+    """
+    格式化转写结果用于显示
+    """
+    if isinstance(transcript_data, str):
+        return transcript_data
+    
+    segments = transcript_data.get("segments", [])
+    if not segments:
+        return transcript_data.get("text", "")
+    
+    lines = []
+    for seg in segments:
+        speaker = seg.get("speaker", "说话人")
+        text = seg.get("text", "")
+        timestamp = f"[{seg.get('start', 0):.1f}s]"
+        lines.append(f"{timestamp} {speaker}: {text}")
+    
+    return "\n".join(lines)
