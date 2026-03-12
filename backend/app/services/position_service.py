@@ -6,8 +6,18 @@ from app.models.models import Position, PositionStatus
 from uuid import UUID
 from typing import List, Optional
 from app.services.ai_service import generate_jd
+from fastapi import HTTPException
 
 def create_position(db: Session, position: PositionCreate):
+    # 验证外键 hiring_manager_id 是否存在
+    if position.hiring_manager_id:
+        hiring_manager = db.query(User).filter(User.id == position.hiring_manager_id).first()
+        if not hiring_manager:
+            raise HTTPException(
+                status_code=400,
+                detail=f"招聘经理 (hiring_manager_id: {position.hiring_manager_id}) 不存在"
+            )
+
     db_position = Position(**position.dict())
     db.add(db_position)
     db.commit()
@@ -115,7 +125,23 @@ def delete_position(db: Session, position_id: UUID):
     db_position = db.query(Position).filter(Position.id == position_id).first()
     if not db_position:
         return None
-    
+
+    # 检查是否有关联的简历
+    related_resumes = db.query(Resume).filter(Resume.position_id == position_id).count()
+    if related_resumes > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无法删除该岗位，存在 {related_resumes} 份关联简历"
+        )
+
+    # 检查是否有关联的题库
+    related_banks = db.query(QuestionBank).filter(QuestionBank.position_id == position_id).count()
+    if related_banks > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无法删除该岗位，存在 {related_banks} 个关联题库"
+        )
+
     db.delete(db_position)
     db.commit()
     return db_position

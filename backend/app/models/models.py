@@ -200,6 +200,10 @@ class Interview(Base):
     round = Column(Integer, default=1) # Interview round
     interview_time = Column(DateTime(timezone=True))
     started_at = Column(DateTime(timezone=True), nullable=True) # 面试实际开始时间
+    interview_type = Column(String, default="onsite")  # onsite, video, phone - 面试形式
+    interview_category = Column(String, default="technical")  # hr, technical, manager, ceo, comprehensive - 面试类型
+    interview_location = Column(String, nullable=True)  # 面试地点
+    meeting_link = Column(String, nullable=True)  # 会议链接
     questions = Column(JSON)
     scores = Column(JSON)
     comments = Column(JSON)

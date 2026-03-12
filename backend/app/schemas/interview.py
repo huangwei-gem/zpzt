@@ -23,7 +23,6 @@ class InterviewCreate(InterviewBase):
     question_count: Optional[int] = 5
     skip_ai_questions: Optional[bool] = False
     skip_email: Optional[bool] = False
-    skip_ai_questions: Optional[bool] = False
 
 class InterviewUpdate(BaseModel):
     interviewer: Optional[str] = None

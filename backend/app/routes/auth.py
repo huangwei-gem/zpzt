@@ -8,6 +8,7 @@ from app.schemas.user import Token, UserResponse, UserLogin, TokenData, UserCrea
 from app.core.security import verify_password, create_access_token, SECRET_KEY, ALGORITHM, check_roles, get_password_hash, get_current_user_dep
 from datetime import timedelta
 from typing import List
+import re
 
 router = APIRouter(
     prefix="/auth",
@@ -16,6 +17,29 @@ router = APIRouter(
 
 # Reuse the dependency from security.py to avoid duplication and mismatch
 get_current_user = get_current_user_dep
+
+def validate_password_strength(password: str) -> None:
+    """
+    验证密码强度
+    - 至少8个字符
+    - 必须包含字母
+    - 必须包含数字
+    """
+    if len(password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="密码长度至少8位"
+        )
+    if not re.search(r'[A-Za-z]', password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="密码必须包含字母"
+        )
+    if not re.search(r'\d', password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="密码必须包含数字"
+        )
 
 @router.post("/token", response_model=Token)
 def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
@@ -92,6 +116,8 @@ def change_password(
 ):
     if not verify_password(payload.current_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail="当前密码错误")
+    # 验证新密码强度
+    validate_password_strength(payload.new_password)
     current_user.hashed_password = get_password_hash(payload.new_password)
     db.add(current_user)
     db.commit()
@@ -109,14 +135,17 @@ def get_users(
 
 @router.post("/users", response_model=UserResponse)
 def create_user(
-    user: UserCreate, 
+    user: UserCreate,
     db: Session = Depends(get_db),
     current_user: UserResponse = Depends(check_roles([UserRole.ADMIN]))
 ):
     db_user = db.query(User).filter(User.email == user.email).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
+
+    # 验证密码强度
+    validate_password_strength(user.password)
+
     hashed_password = get_password_hash(user.password)
     new_user = User(
         email=user.email,

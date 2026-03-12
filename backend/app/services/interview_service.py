@@ -271,6 +271,8 @@ def create_interview(db: Session, interview: InterviewCreate, background_tasks: 
     if not position:
         raise HTTPException(status_code=404, detail="Position not found")
 
+    interview_category = interview.interview_category or 'technical'
+
     db_interview = Interview(
         resume_id=interview.resume_id,
         position_id=interview.position_id,
@@ -279,18 +281,13 @@ def create_interview(db: Session, interview: InterviewCreate, background_tasks: 
         questions=None if not interview.skip_ai_questions else [], # None means generating, [] means skipped
         status=InterviewStatus.SCHEDULED,
         panel_members=interview.panel_members,
-        round=interview.round or 1
+        round=interview.round or 1,
+        # 正确保存面试类型和地点字段
+        interview_type=interview.interview_type or "onsite",
+        interview_category=interview_category,
+        interview_location=interview.interview_location,
+        meeting_link=interview.meeting_link
     )
-
-    # 存储面试类型和地点信息到 comments 中
-    interview_category = interview.interview_category or 'technical'
-    if interview.interview_type or interview.interview_location or interview.meeting_link or interview_category:
-        db_interview.comments = {
-            "interview_type": interview.interview_type or "onsite",
-            "interview_category": interview_category,
-            "interview_location": interview.interview_location,
-            "meeting_link": interview.meeting_link
-        }
 
     db.add(db_interview)
     db.commit()
