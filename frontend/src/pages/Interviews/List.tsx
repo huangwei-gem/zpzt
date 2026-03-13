@@ -32,6 +32,7 @@ const InterviewsList: React.FC = () => {
   const [pendingInterviewData, setPendingInterviewData] = useState<any>(null);
   const [sendingEmail, setSendingEmail] = useState(false);
   const [emailForm] = Form.useForm();
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -283,6 +284,30 @@ const InterviewsList: React.FC = () => {
     setInterviewModalVisible(true);
   };
 
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先选择要删除的面试');
+      return;
+    }
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 个面试吗？`,
+      okText: '确认',
+      cancelText: '取消',
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          await Promise.all(selectedRowKeys.map(id => request.delete(`/interviews/${id}`)));
+          message.success(`成功删除 ${selectedRowKeys.length} 个面试`);
+          setSelectedRowKeys([]);
+          fetchInterviews();
+        } catch (error) {
+          message.error('批量删除失败');
+        }
+      },
+    });
+  };
+
   const columns = [
     {
       title: '候选人',
@@ -416,19 +441,28 @@ const InterviewsList: React.FC = () => {
   return (
     <div>
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-        <Select
-          placeholder="筛选状态"
-          allowClear
-          value={statusFilter}
-          onChange={(val) => setStatusFilter(val)}
-          style={{ width: 160 }}
-          options={[
-            { value: 'scheduled', label: '待面试' },
-            { value: 'in_progress', label: '面试中' },
-            { value: 'completed', label: '已完成' },
-            { value: 'cancelled', label: '已取消' },
-          ]}
-        />
+        <Space>
+          <Select
+            placeholder="筛选状态"
+            allowClear
+            value={statusFilter}
+            onChange={(val) => setStatusFilter(val)}
+            style={{ width: 160 }}
+            options={[
+              { value: 'scheduled', label: '待面试' },
+              { value: 'in_progress', label: '面试中' },
+              { value: 'completed', label: '已完成' },
+              { value: 'cancelled', label: '已取消' },
+            ]}
+          />
+          {selectedRowKeys.length > 0 && canDeleteInterview && (
+            <>
+              <span style={{ lineHeight: '32px' }}>已选 {selectedRowKeys.length} 项</span>
+              <Button danger onClick={handleBatchDelete}>批量删除</Button>
+              <Button onClick={() => setSelectedRowKeys([])}>取消选择</Button>
+            </>
+          )}
+        </Space>
         {(user?.role === 'admin' || user?.role === 'hr') && (
           <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenSelectResume}>安排面试</Button>
         )}
@@ -439,6 +473,10 @@ const InterviewsList: React.FC = () => {
         loading={loading}
         rowKey="id"
         pagination={{ pageSize: 10, showSizeChanger: true }}
+        rowSelection={{
+          selectedRowKeys,
+          onChange: (keys) => setSelectedRowKeys(keys),
+        }}
       />
 
       {/* 取消面试弹窗 */}

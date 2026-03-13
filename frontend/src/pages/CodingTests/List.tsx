@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Card, Form, Input, Modal, Select, Space, Table, Tag, message, Tooltip, Typography } from 'antd';
-import { PlusOutlined, LinkOutlined, SendOutlined, StopOutlined, EyeOutlined, EditOutlined, ImportOutlined } from '@ant-design/icons';
+import { Button, Card, Form, Input, Modal, Select, Space, Table, Tag, message, Tooltip, Typography, Popconfirm } from 'antd';
+import { PlusOutlined, LinkOutlined, SendOutlined, StopOutlined, EyeOutlined, EditOutlined, ImportOutlined, DeleteOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -44,6 +44,7 @@ const CodingTestsList: React.FC = () => {
   const [selectedSubmission, setSelectedSubmission] = useState<any>(null);
   const [selectedTest, setSelectedTest] = useState<any>(null);
   const [starterCodeLanguage, setStarterCodeLanguage] = useState('javascript');
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
   const fetchList = async () => {
     setLoading(true);
@@ -298,14 +299,86 @@ const CodingTestsList: React.FC = () => {
               <Button type="text" danger icon={<StopOutlined />} onClick={() => close(record.id)} />
             </Tooltip>
           )}
+          <Popconfirm title="确定删除此测试？" onConfirm={() => handleDelete(record.id)}>
+            <Tooltip title="删除">
+              <Button type="text" danger icon={<DeleteOutlined />} />
+            </Tooltip>
+          </Popconfirm>
         </Space>
       ),
     },
   ];
 
+  const handleDelete = async (id: string) => {
+    try {
+      await request.delete(`/coding-tests/${id}`);
+      message.success('删除成功');
+      fetchList();
+    } catch (error) {
+      message.error('删除失败');
+    }
+  };
+
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先选择要删除的测试');
+      return;
+    }
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 个测试吗？`,
+      okText: '确认',
+      cancelText: '取消',
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          await Promise.all(selectedRowKeys.map(id => request.delete(`/coding-tests/${id}`)));
+          message.success(`成功删除 ${selectedRowKeys.length} 个测试`);
+          setSelectedRowKeys([]);
+          fetchList();
+        } catch (error) {
+          message.error('批量删除失败');
+        }
+      },
+    });
+  };
+
+  const handleBatchPublish = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先选择要发布的测试');
+      return;
+    }
+    Modal.confirm({
+      title: '确认批量发布',
+      content: `确定要发布选中的 ${selectedRowKeys.length} 个测试吗？`,
+      okText: '确认',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await Promise.all(selectedRowKeys.map(id => request.put(`/coding-tests/${id}`, { status: 'published' })));
+          message.success(`成功发布 ${selectedRowKeys.length} 个测试`);
+          setSelectedRowKeys([]);
+          fetchList();
+        } catch (error) {
+          message.error('批量发布失败');
+        }
+      },
+    });
+  };
+
   return (
     <div>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
+        <Space>
+          {selectedRowKeys.length > 0 && (
+            <>
+              <span style={{ lineHeight: '32px' }}>已选 {selectedRowKeys.length} 项</span>
+              <Button onClick={handleBatchPublish}>批量发布</Button>
+              <Button danger onClick={handleBatchDelete}>批量删除</Button>
+              <Button onClick={() => setSelectedRowKeys([])}>取消选择</Button>
+            </>
+          )}
+        </Space>
         <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>创建笔试</Button>
       </div>
 
@@ -315,6 +388,10 @@ const CodingTestsList: React.FC = () => {
         loading={loading}
         rowKey="id"
         pagination={{ pageSize: 10, showSizeChanger: true }}
+        rowSelection={{
+          selectedRowKeys,
+          onChange: (keys) => setSelectedRowKeys(keys),
+        }}
       />
 
       <Modal

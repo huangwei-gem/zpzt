@@ -16,6 +16,7 @@ const ResumesList: React.FC = () => {
   const [questionBanks, setQuestionBanks] = useState([]);
   const [pollingEnabled, setPollingEnabled] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [interviewModalVisible, setInterviewModalVisible] = useState(false);
@@ -320,6 +321,58 @@ const ResumesList: React.FC = () => {
     });
   };
 
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先选择要删除的简历');
+      return;
+    }
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 份简历吗？此操作不可恢复。`,
+      okText: '确认',
+      cancelText: '取消',
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          await Promise.all(selectedRowKeys.map(id => request.delete(`/resumes/${id}`)));
+          message.success(`成功删除 ${selectedRowKeys.length} 份简历`);
+          setSelectedRowKeys([]);
+          fetchResumes();
+        } catch (error) {
+          message.error('批量删除失败');
+        }
+      },
+    });
+  };
+
+  const handleBatchReject = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先选择要淘汰的简历');
+      return;
+    }
+    Modal.confirm({
+      title: '确认批量淘汰',
+      content: `确定要淘汰选中的 ${selectedRowKeys.length} 份简历吗？`,
+      okText: '确认',
+      cancelText: '取消',
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          await Promise.all(selectedRowKeys.map(id => 
+            request.post(`/resumes/${id}/confirm-rejection`, null, {
+              params: { reason_category: 'other', reason_detail: '批量淘汰' }
+            })
+          ));
+          message.success(`成功淘汰 ${selectedRowKeys.length} 份简历`);
+          setSelectedRowKeys([]);
+          fetchResumes();
+        } catch (error) {
+          message.error('批量淘汰失败');
+        }
+      },
+    });
+  };
+
   const handleReparse = (record: any) => {
     Modal.confirm({
       title: '重新解析简历',
@@ -613,6 +666,22 @@ const ResumesList: React.FC = () => {
                 <Select.Option value="hired">已录用</Select.Option>
               </Select>
             </Form.Item>
+            {selectedRowKeys.length > 0 && (
+              <>
+                <Form.Item>
+                  <span style={{ color: '#64748B' }}>已选 {selectedRowKeys.length} 项</span>
+                </Form.Item>
+                <Form.Item>
+                  <Button danger onClick={handleBatchReject}>批量淘汰</Button>
+                </Form.Item>
+                <Form.Item>
+                  <Button danger onClick={handleBatchDelete}>批量删除</Button>
+                </Form.Item>
+                <Form.Item>
+                  <Button onClick={() => setSelectedRowKeys([])}>取消选择</Button>
+                </Form.Item>
+              </>
+            )}
             <Form.Item>
               <Space>
                 <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>搜索</Button>
@@ -629,6 +698,10 @@ const ResumesList: React.FC = () => {
         loading={loading} 
         rowKey="id" 
         pagination={{ pageSize: 10, showSizeChanger: true }}
+        rowSelection={{
+          selectedRowKeys,
+          onChange: setSelectedRowKeys,
+        }}
       />
 
       {/* Upload Modal */}

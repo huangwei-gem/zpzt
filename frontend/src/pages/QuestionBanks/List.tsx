@@ -18,6 +18,7 @@ const QuestionBanksList: React.FC = () => {
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
   const [fileList, setFileList] = useState<any[]>([]);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   
   // File Preview State
   const [fileContent, setFileContent] = useState<string | null>(null);
@@ -132,6 +133,30 @@ const QuestionBanksList: React.FC = () => {
           fetchQuestionBanks();
         } catch (error) {
           message.error('删除失败');
+        }
+      },
+    });
+  };
+
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先选择要删除的题库');
+      return;
+    }
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 个题库吗？`,
+      okText: '确认',
+      cancelText: '取消',
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          await Promise.all(selectedRowKeys.map(id => request.delete(`/question-banks/${id}`)));
+          message.success(`成功删除 ${selectedRowKeys.length} 个题库`);
+          setSelectedRowKeys([]);
+          fetchQuestionBanks();
+        } catch (error) {
+          message.error('批量删除失败');
         }
       },
     });
@@ -348,12 +373,21 @@ const QuestionBanksList: React.FC = () => {
 
   return (
     <div>
-      <div style={{ marginBottom: 32, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <div>
-          <Title level={2} style={{ margin: 0, fontWeight: 700 }}>题库管理</Title>
+          <Title level={2} style={{ margin: 0 }}>题库管理</Title>
           <Text type="secondary">管理面试题目和知识库</Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} size="large" style={{ borderRadius: '8px' }}>上传题库</Button>
+        <Space>
+          {selectedRowKeys.length > 0 && (
+            <>
+              <span style={{ color: '#64748B' }}>已选 {selectedRowKeys.length} 项</span>
+              <Button danger onClick={handleBatchDelete}>批量删除</Button>
+              <Button onClick={() => setSelectedRowKeys([])}>取消选择</Button>
+            </>
+          )}
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} size="large" style={{ borderRadius: '8px' }}>上传题库</Button>
+        </Space>
       </div>
       
       <Table 
@@ -362,6 +396,10 @@ const QuestionBanksList: React.FC = () => {
         loading={loading} 
         rowKey="id" 
         pagination={{ pageSize: 10, showSizeChanger: true }}
+        rowSelection={{
+          selectedRowKeys,
+          onChange: setSelectedRowKeys,
+        }}
       />
 
       <Modal

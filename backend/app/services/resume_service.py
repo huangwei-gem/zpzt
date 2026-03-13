@@ -12,6 +12,7 @@ from uuid import UUID
 from fastapi import UploadFile, HTTPException
 from app.utils.file_storage import save_upload_file
 from app.services.ai_service import analyze_resume, generate_resume_markdown
+from app.services.task_queue import get_task_queue
 import docx
 import PyPDF2
 import os
@@ -43,14 +44,13 @@ def read_file_content(file_path: str) -> str:
 from app.config.database import SessionLocal
 from fastapi import BackgroundTasks
 
-def process_resume_background(resume_id: UUID, position_id: UUID, use_user_info: bool = False):
-    """
-    后台解析简历
-    - use_user_info: 如果为True，表示姓名/邮箱/电话已由用户填写，不从简历解析覆盖
-    """
+def process_resume_task(payload: Dict[str, Any]):
+    resume_id = payload["resume_id"]
+    position_id = payload["position_id"]
+    use_user_info = payload.get("use_user_info", False)
+
     db = SessionLocal()
     try:
-        # 1. Get Resume
         resume = db.query(Resume).filter(Resume.id == resume_id).first()
         if not resume:
             return
@@ -58,7 +58,6 @@ def process_resume_background(resume_id: UUID, position_id: UUID, use_user_info:
         resume.parse_error = None
         db.commit()
 
-        # 2. Read content
         content = read_file_content(resume.file_path)
         if not content:
             resume.parse_status = "failed"
@@ -68,7 +67,6 @@ def process_resume_background(resume_id: UUID, position_id: UUID, use_user_info:
 
         resume.raw_text = content
 
-        # 3. Get Position
         position = db.query(Position).filter(Position.id == position_id).first()
         if not position:
             resume.parse_status = "failed"
@@ -78,7 +76,6 @@ def process_resume_background(resume_id: UUID, position_id: UUID, use_user_info:
 
         position_desc = f"{position.title}\n{position.description}\n{position.requirements}"
 
-        # 4. AI Analysis
         parsed_data = analyze_resume(content, position_desc)
         if not parsed_data or "match_score" not in parsed_data:
             resume.parse_status = "failed"
@@ -86,13 +83,11 @@ def process_resume_background(resume_id: UUID, position_id: UUID, use_user_info:
             db.commit()
             return
 
-        # 5. Update Resume
         resume.parsed_data = parsed_data
         resume.match_score = parsed_data.get("match_score", 0)
         resume.screening_result = parsed_data.get("screening_result", ScreeningResult.PENDING)
         resume.ai_review = parsed_data.get("ai_review", "")
 
-        # 如果用户没有填写基本信息，则从简历中解析
         if not use_user_info:
             resume.candidate_name = parsed_data.get("candidate_name", "")
             resume.contact = parsed_data.get("contact", "")
@@ -106,10 +101,8 @@ def process_resume_background(resume_id: UUID, position_id: UUID, use_user_info:
         resume.parsed_at = datetime.utcnow()
 
         if resume.match_score >= 60:
-            # 高分简历：进入待评审状态，等待HR指派评审人
             resume.status = ResumeStatus.PENDING_REVIEW
         else:
-            # 低分简历：AI建议淘汰，但需要人工确认
             resume.status = ResumeStatus.AUTO_REJECTED_PENDING_REVIEW
 
         db.commit()
@@ -125,6 +118,38 @@ def process_resume_background(resume_id: UUID, position_id: UUID, use_user_info:
             pass
     finally:
         db.close()
+
+
+def on_resume_parse_failure(payload: Dict[str, Any], error: str):
+    resume_id = payload["resume_id"]
+    db = SessionLocal()
+    try:
+        resume = db.query(Resume).filter(Resume.id == resume_id).first()
+        if resume:
+            resume.parse_status = "failed"
+            resume.parse_error = f"解析失败（重试后）: {error[:400]}"
+            resume.candidate_name = "解析失败"
+            db.commit()
+            print(f"[TaskQueue] Updated resume {resume_id} status to failed")
+    except Exception as e:
+        print(f"[TaskQueue] Failed to update resume status: {e}")
+    finally:
+        db.close()
+
+
+def process_resume_background(resume_id: UUID, position_id: UUID, use_user_info: bool = False):
+    queue = get_task_queue()
+    queue.submit(
+        task_id=str(resume_id),
+        task_type="resume_parse",
+        payload={
+            "resume_id": resume_id,
+            "position_id": position_id,
+            "use_user_info": use_user_info,
+        },
+        callback=process_resume_task,
+        on_failure=on_resume_parse_failure,
+    )
 
 def upload_resume(db: Session, file: UploadFile, position_id: UUID, background_tasks: BackgroundTasks,
                   candidate_name: str = None, email: str = None, contact: str = None):

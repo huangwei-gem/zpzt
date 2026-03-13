@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Space, message, Modal, Form, Input, Select, Tag, Tooltip, Typography, Drawer, Descriptions, Divider, Progress, Badge, Spin } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, GlobalOutlined, StopOutlined, CopyOutlined, RobotOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Table, Button, Space, message, Modal, Form, Input, Select, Tag, Tooltip, Typography, Drawer, Descriptions, Divider, Progress, Badge, Spin, Popconfirm } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, GlobalOutlined, StopOutlined, CopyOutlined, RobotOutlined, ThunderboltOutlined, DeleteFilled } from '@ant-design/icons';
 import request from '../../utils/request';
 import JDGeneratorModal from '../../components/JDGeneratorModal';
 import ReactMarkdown from 'react-markdown';
@@ -70,6 +70,7 @@ const PositionsList: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [users, setUsers] = useState<any[]>([]);
   const [jdModalVisible, setJdModalVisible] = useState(false);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
   const [searchTitle, setSearchTitle] = useState<string>('');
   const [searchStatus, setSearchStatus] = useState<string | undefined>(undefined);
@@ -147,6 +148,53 @@ const PositionsList: React.FC = () => {
           fetchPositions();
         } catch (error) {
           message.error('删除失败');
+        }
+      },
+    });
+  };
+
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先选择要删除的岗位');
+      return;
+    }
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 个岗位吗？`,
+      okText: '确认',
+      cancelText: '取消',
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          await Promise.all(selectedRowKeys.map(id => request.delete(`/positions/${id}`)));
+          message.success(`成功删除 ${selectedRowKeys.length} 个岗位`);
+          setSelectedRowKeys([]);
+          fetchPositions();
+        } catch (error) {
+          message.error('批量删除失败');
+        }
+      },
+    });
+  };
+
+  const handleBatchPublish = (publish: boolean) => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先选择要操作的岗位');
+      return;
+    }
+    Modal.confirm({
+      title: publish ? '确认批量发布' : '确认批量下架',
+      content: `确定要${publish ? '发布' : '下架'}选中的 ${selectedRowKeys.length} 个岗位吗？`,
+      okText: '确认',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await Promise.all(selectedRowKeys.map(id => request.put(`/positions/${id}`, { status: publish ? 'published' : 'closed' })));
+          message.success(`成功${publish ? '发布' : '下架'} ${selectedRowKeys.length} 个岗位`);
+          setSelectedRowKeys([]);
+          fetchPositions();
+        } catch (error) {
+          message.error('操作失败');
         }
       },
     });
@@ -336,7 +384,7 @@ const PositionsList: React.FC = () => {
         <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} size="large" style={{ borderRadius: '8px' }}>新增岗位</Button>
       </div>
       
-      <div style={{ marginBottom: 24, padding: '24px', background: '#fff', borderRadius: '12px', border: '1px solid #E2E8F0', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+      <div style={{ marginBottom: 24, padding: '24px', background: '#fff', borderRadius: '12px', border: '1px solid #E2E8F0', display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
           <Input 
               placeholder="搜索岗位名称" 
               prefix={<EyeOutlined style={{ color: '#94A3B8' }} />} 
@@ -354,6 +402,15 @@ const PositionsList: React.FC = () => {
               <Select.Option value="published">招聘中</Select.Option>
               <Select.Option value="closed">已关闭</Select.Option>
           </Select>
+          {selectedRowKeys.length > 0 && (
+            <Space>
+              <span style={{ color: '#64748B' }}>已选 {selectedRowKeys.length} 项</span>
+              <Button onClick={() => handleBatchPublish(true)} type="primary" ghost>批量发布</Button>
+              <Button onClick={() => handleBatchPublish(false)}>批量下架</Button>
+              <Button danger onClick={handleBatchDelete}>批量删除</Button>
+              <Button onClick={() => setSelectedRowKeys([])}>取消选择</Button>
+            </Space>
+          )}
       </div>
       
       <Table 
@@ -362,6 +419,10 @@ const PositionsList: React.FC = () => {
         loading={loading} 
         rowKey="id" 
         pagination={{ pageSize: 10, showSizeChanger: true }}
+        rowSelection={{
+          selectedRowKeys,
+          onChange: setSelectedRowKeys,
+        }}
       />
 
       <Modal

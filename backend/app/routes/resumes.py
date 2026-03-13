@@ -14,7 +14,7 @@ from app.services.resume_service import (
     complete_department_review, aggregate_department_reviews, submit_hr_decision,
     confirm_rejection, override_rejection, get_resume_with_reviews
 )
-from app.models.models import ResumeStatus, RejectReasonCategory, User, UserRole
+from app.models.models import ResumeStatus, RejectReasonCategory, User, UserRole, Resume
 from app.core.security import check_roles
 from app.routes.auth import get_current_user
 from typing import List, Dict, Any, Optional
@@ -238,3 +238,59 @@ def override_rejection_route(
     """
     hr_id = current_user.id
     return override_rejection(db, resume_id, hr_id)
+
+
+@router.get("/queue/status")
+def get_queue_status(
+    current_user: User = Depends(check_roles([UserRole.ADMIN, UserRole.HR]))
+):
+    from app.services.task_queue import get_task_queue
+    queue = get_task_queue()
+    return queue.get_stats()
+
+
+@router.get("/queue/task/{task_id}")
+def get_task_status(
+    task_id: str,
+    current_user: User = Depends(check_roles([UserRole.ADMIN, UserRole.HR]))
+):
+    from app.services.task_queue import get_task_queue
+    queue = get_task_queue()
+    status = queue.get_status(task_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return status
+
+
+@router.post("/fix-stuck")
+def fix_stuck_resumes(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(check_roles([UserRole.ADMIN, UserRole.HR]))
+):
+    from datetime import datetime, timedelta
+    from app.services.task_queue import get_task_queue
+
+    queue = get_task_queue()
+    queue_stats = queue.get_stats()
+
+    stuck_resumes = db.query(Resume).filter(
+        Resume.parse_status == "processing",
+        Resume.updated_at < datetime.utcnow() - timedelta(minutes=10)
+    ).all()
+
+    fixed_count = 0
+    for resume in stuck_resumes:
+        task_status = queue.get_status(str(resume.id))
+
+        if task_status is None or task_status["status"] in ["completed", "failed"]:
+            resume.parse_status = "failed"
+            resume.parse_error = "解析超时，请重新解析"
+            resume.candidate_name = "解析失败"
+            fixed_count += 1
+
+    db.commit()
+
+    return {
+        "fixed_count": fixed_count,
+        "queue_stats": queue_stats
+    }

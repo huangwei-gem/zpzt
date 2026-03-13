@@ -45,6 +45,7 @@ const OfferTemplates: React.FC = () => {
   const [templates, setTemplates] = useState<OfferTemplate[]>([]);
   const [loading, setLoading] = useState(false);
   const [positions, setPositions] = useState<any[]>([]);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   
   const [modalVisible, setModalVisible] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<OfferTemplate | null>(null);
@@ -135,6 +136,30 @@ const OfferTemplates: React.FC = () => {
     }
   };
 
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先选择要删除的模板');
+      return;
+    }
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 个模板吗？`,
+      okText: '确认',
+      cancelText: '取消',
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          await Promise.all(selectedRowKeys.map(id => request.delete(`/offer-templates/${id}`)));
+          message.success(`成功删除 ${selectedRowKeys.length} 个模板`);
+          setSelectedRowKeys([]);
+          fetchTemplates();
+        } catch (error) {
+          message.error('批量删除失败');
+        }
+      },
+    });
+  };
+
   const columns = [
     {
       title: '模板名称',
@@ -223,7 +248,16 @@ const OfferTemplates: React.FC = () => {
 
       <Card>
         <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
-          <Text>共 {templates.length} 个模板</Text>
+          <Space>
+            <Text>共 {templates.length} 个模板</Text>
+            {selectedRowKeys.length > 0 && (
+              <>
+                <span style={{ lineHeight: '32px' }}>已选 {selectedRowKeys.length} 项</span>
+                <Button danger onClick={handleBatchDelete}>批量删除</Button>
+                <Button onClick={() => setSelectedRowKeys([])}>取消选择</Button>
+              </>
+            )}
+          </Space>
           <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>新建模板</Button>
         </div>
 
@@ -233,6 +267,10 @@ const OfferTemplates: React.FC = () => {
           rowKey="id"
           loading={loading}
           pagination={false}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (keys) => setSelectedRowKeys(keys),
+          }}
         />
       </Card>
 

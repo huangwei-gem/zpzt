@@ -91,6 +91,7 @@ const OffersList: React.FC = () => {
   const [stats, setStats] = useState<OfferStats | null>(null);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   
   const [createModalVisible, setCreateModalVisible] = useState(false);
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -314,6 +315,55 @@ const OffersList: React.FC = () => {
     }
   };
 
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先选择要删除的Offer');
+      return;
+    }
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 个Offer吗？此操作不可恢复。`,
+      okText: '确认',
+      cancelText: '取消',
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          await Promise.all(selectedRowKeys.map(id => request.delete(`/offers/${id}`)));
+          message.success(`成功删除 ${selectedRowKeys.length} 个Offer`);
+          setSelectedRowKeys([]);
+          fetchOffers();
+          fetchStats();
+        } catch (error) {
+          message.error('批量删除失败');
+        }
+      },
+    });
+  };
+
+  const handleBatchSend = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先选择要发送的Offer');
+      return;
+    }
+    Modal.confirm({
+      title: '确认批量发送',
+      content: `确定要发送选中的 ${selectedRowKeys.length} 个Offer吗？`,
+      okText: '确认',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await Promise.all(selectedRowKeys.map(id => request.post(`/offers/${id}/send`)));
+          message.success(`成功发送 ${selectedRowKeys.length} 个Offer`);
+          setSelectedRowKeys([]);
+          fetchOffers();
+          fetchStats();
+        } catch (error) {
+          message.error('批量发送失败');
+        }
+      },
+    });
+  };
+
   const openEditModal = (offer: Offer) => {
     setCurrentOffer(offer);
     editForm.setFieldsValue({
@@ -511,6 +561,14 @@ const OffersList: React.FC = () => {
               ))}
             </Select>
             <Button icon={<ReloadOutlined />} onClick={() => { fetchOffers(); fetchStats(); }}>刷新</Button>
+            {selectedRowKeys.length > 0 && (
+              <>
+                <span style={{ color: '#64748B', lineHeight: '32px' }}>已选 {selectedRowKeys.length} 项</span>
+                <Button type="primary" onClick={handleBatchSend}>批量发送</Button>
+                <Button danger onClick={handleBatchDelete}>批量删除</Button>
+                <Button onClick={() => setSelectedRowKeys([])}>取消选择</Button>
+              </>
+            )}
           </Space>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => {
             createForm.resetFields();
@@ -523,6 +581,10 @@ const OffersList: React.FC = () => {
           dataSource={offers}
           rowKey="id"
           loading={loading}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: setSelectedRowKeys,
+          }}
           pagination={{
             ...pagination,
             showSizeChanger: true,

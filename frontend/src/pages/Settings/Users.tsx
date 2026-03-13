@@ -22,6 +22,7 @@ const UsersList: React.FC = () => {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm();
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -109,6 +110,30 @@ const UsersList: React.FC = () => {
     }
   };
 
+  const handleBatchDelete = () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先选择要删除的用户');
+      return;
+    }
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${selectedRowKeys.length} 个用户吗？`,
+      okText: '确认',
+      cancelText: '取消',
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          await Promise.all(selectedRowKeys.map(id => request.delete(`/auth/users/${id}`)));
+          message.success(`成功删除 ${selectedRowKeys.length} 个用户`);
+          setSelectedRowKeys([]);
+          fetchUsers();
+        } catch (error) {
+          message.error('批量删除失败');
+        }
+      },
+    });
+  };
+
   const getRoleTag = (role: string) => {
     const roleConfig: Record<string, { color: string; label: string }> = {
       admin: { color: 'red', label: '管理员' },
@@ -190,6 +215,13 @@ const UsersList: React.FC = () => {
           <Text type="secondary">管理系统用户及权限分配</Text>
         </div>
         <Space>
+          {selectedRowKeys.length > 0 && (
+            <>
+              <span style={{ lineHeight: '32px' }}>已选 {selectedRowKeys.length} 项</span>
+              <Button danger onClick={handleBatchDelete}>批量删除</Button>
+              <Button onClick={() => setSelectedRowKeys([])}>取消选择</Button>
+            </>
+          )}
           <Button icon={<ReloadOutlined />} onClick={fetchUsers}>刷新</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增用户</Button>
         </Space>
@@ -201,6 +233,10 @@ const UsersList: React.FC = () => {
         loading={loading}
         rowKey="id"
         pagination={{ pageSize: 10, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+        rowSelection={{
+          selectedRowKeys,
+          onChange: (keys) => setSelectedRowKeys(keys),
+        }}
       />
 
       <Modal
