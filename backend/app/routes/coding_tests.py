@@ -19,6 +19,8 @@ from app.schemas.coding_test import (
     CodingSubmitRequest,
     CodingSubmissionResponse,
     PublicCodingSubmissionResponse,
+    ChoiceSubmitRequest,
+    EssaySubmitRequest,
 )
 from app.services.leetcode_import_service import import_leetcode_problem
 from app.services.coding_test_service import (
@@ -34,7 +36,10 @@ from app.services.coding_test_service import (
     get_public_coding_test,
     run_public_code,
     submit_public_code,
+    submit_choice_answers,
+    submit_essay_answers,
     get_public_submission,
+    generate_questions_from_bank,
 )
 
 
@@ -66,6 +71,47 @@ def import_leetcode_route(
     current_user: User = Depends(check_roles([UserRole.ADMIN, UserRole.HR])),
 ):
     return import_leetcode_problem(payload.url)
+
+
+@router.post("/generate-questions")
+def generate_questions_route(
+    question_bank_id: UUID,
+    test_type: str,
+    count: int = 10,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(check_roles([UserRole.ADMIN, UserRole.HR])),
+):
+    questions = generate_questions_from_bank(db, question_bank_id, test_type, count)
+    return {"questions": questions}
+
+
+@router.post("/{coding_test_id}/generate-questions")
+def generate_questions_for_test_route(
+    coding_test_id: UUID,
+    question_bank_id: UUID,
+    test_type: str,
+    count: int = 10,
+    background_tasks: BackgroundTasks = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(check_roles([UserRole.ADMIN, UserRole.HR])),
+):
+    db_test = get_coding_test(db, coding_test_id)
+    if not db_test:
+        raise HTTPException(status_code=404, detail="Coding test not found")
+    
+    db_test.question_generation_status = "generating"
+    db.commit()
+    
+    from app.services.coding_test_service import generate_questions_background
+    background_tasks.add_task(
+        generate_questions_background,
+        coding_test_id,
+        question_bank_id,
+        test_type,
+        count
+    )
+    
+    return {"status": "generating"}
 
 
 @router.get("/{coding_test_id}", response_model=CodingTestResponse)
@@ -163,12 +209,25 @@ def get_public_coding_test_route(token: str, db: Session = Depends(get_db)):
     db_test = get_public_coding_test(db, token)
     if not db_test or db_test.status != CodingTestStatus.PUBLISHED:
         raise HTTPException(status_code=404, detail="Coding test not found")
+    
+    questions = db_test.questions or []
+    for q in questions:
+        if "correct_answer" in q:
+            del q["correct_answer"]
+        if "reference_answer" in q:
+            del q["reference_answer"]
+        if "keywords" in q:
+            del q["keywords"]
+    
     return PublicCodingTestResponse(
         title=db_test.title,
         description=db_test.description,
+        test_type=db_test.test_type,
         difficulty=db_test.difficulty,
         language=db_test.language,
         starter_code=db_test.starter_code,
+        questions=questions,
+        duration_minutes=db_test.duration_minutes,
     )
 
 
@@ -204,6 +263,60 @@ def submit_public_code_route(
         id=db_sub.id,
         coding_test_id=db_sub.coding_test_id,
         language=db_sub.language,
+        run_result=db_sub.run_result,
+        passed=db_sub.passed,
+        score=db_sub.score,
+        status=db_sub.status,
+        created_at=db_sub.created_at,
+        submitted_at=db_sub.submitted_at,
+    )
+
+
+@public_router.post("/{token}/submit-choice", response_model=PublicCodingSubmissionResponse)
+def submit_choice_route(
+    token: str,
+    payload: ChoiceSubmitRequest,
+    db: Session = Depends(get_db),
+):
+    answers = [a.dict() for a in payload.answers]
+    db_sub = submit_choice_answers(
+        db,
+        token,
+        payload.candidate_name,
+        payload.candidate_email,
+        answers,
+    )
+    return PublicCodingSubmissionResponse(
+        id=db_sub.id,
+        coding_test_id=db_sub.coding_test_id,
+        run_result=db_sub.run_result,
+        passed=db_sub.passed,
+        score=db_sub.score,
+        status=db_sub.status,
+        created_at=db_sub.created_at,
+        submitted_at=db_sub.submitted_at,
+    )
+
+
+@public_router.post("/{token}/submit-essay", response_model=PublicCodingSubmissionResponse)
+def submit_essay_route(
+    token: str,
+    payload: EssaySubmitRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    answers = [a.dict() for a in payload.answers]
+    db_sub = submit_essay_answers(
+        db,
+        background_tasks,
+        token,
+        payload.candidate_name,
+        payload.candidate_email,
+        answers,
+    )
+    return PublicCodingSubmissionResponse(
+        id=db_sub.id,
+        coding_test_id=db_sub.coding_test_id,
         run_result=db_sub.run_result,
         passed=db_sub.passed,
         score=db_sub.score,

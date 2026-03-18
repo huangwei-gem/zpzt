@@ -22,6 +22,9 @@ import OfferConfirm from '../pages/Offers/Confirm';
 import UsersList from '../pages/Settings/Users';
 import ProfileSettings from '../pages/Settings/Profile';
 import SystemSettingsPage from '../pages/Settings/System';
+import PublicReview from '../pages/Public/Review';
+import WorkflowsList from '../pages/Workflows/List';
+import WorkflowEditor from '../pages/Workflows/Editor';
 import { useAuth } from '../contexts/AuthContext';
 import { Spin } from 'antd';
 
@@ -55,6 +58,10 @@ const router = createBrowserRouter([
   {
     path: '/offer-confirm/:token',
     element: <OfferConfirm />,
+  },
+  {
+    path: '/public/review/:resumeId/:reviewerId',
+    element: <PublicReview />,
   },
   {
     path: '/',
@@ -139,6 +146,14 @@ const router = createBrowserRouter([
       {
         path: 'settings/system',
         element: <SystemSettingsPage />,
+      },
+      {
+        path: 'workflows',
+        element: <WorkflowsList />,
+      },
+      {
+        path: 'workflows/:id',
+        element: <WorkflowEditor />,
       },
     ],
   },

@@ -11,7 +11,8 @@ import {
   BellOutlined,
   SettingOutlined,
   SolutionOutlined,
-  FileAddOutlined
+  FileAddOutlined,
+  ApartmentOutlined
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
@@ -32,7 +33,6 @@ const AppLayout: React.FC = () => {
     navigate('/login');
   };
 
-  // 基础菜单项
   const menuItems = [
     {
       key: '/dashboard',
@@ -55,7 +55,6 @@ const AppLayout: React.FC = () => {
       key: '/resumes',
       icon: <FileTextOutlined />,
       label: '简历管理',
-      // 所有角色可见，但面试官只能看到被指派的简历
     },
     {
       key: '/interviews',
@@ -81,6 +80,11 @@ const AppLayout: React.FC = () => {
       roles: ['admin', 'hr'],
     },
     {
+      key: '/workflows',
+      icon: <ApartmentOutlined />,
+      label: '工作流',
+    },
+    {
       key: '/settings/users',
       icon: <SettingOutlined />,
       label: '用户管理',
@@ -88,9 +92,8 @@ const AppLayout: React.FC = () => {
     },
   ];
 
-  // 根据角色过滤菜单
   const filteredMenuItems = menuItems.filter(item => {
-    if (!item.roles) return true; // 没有角色限制的菜单，所有人可见
+    if (!item.roles) return true;
     return item.roles.includes(role);
   });
 
@@ -99,7 +102,9 @@ const AppLayout: React.FC = () => {
       ? '个人设置'
       : location.pathname.startsWith('/settings/system')
         ? '系统设置'
-        : menuItems.find(item => item.key === location.pathname)?.label || 'AI 面试助手';
+        : location.pathname.startsWith('/workflows/')
+          ? '工作流编辑'
+          : menuItems.find(item => item.key === location.pathname)?.label || 'AI 面试助手';
 
   const userMenuItems: any[] = [
     {

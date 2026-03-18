@@ -392,7 +392,7 @@ def complete_department_review(db: Session, review_id: UUID, reviewer_id: UUID, 
 
 def _check_and_update_resume_status(db: Session, resume_id: UUID):
     """
-    检查所有评审人是否已完成，如果是则更新简历状态
+    检查所有评审人是否已完成，如果是则更新简历状态并发送HR通知邮件
     """
     reviews = db.query(DepartmentReview).filter(
         DepartmentReview.resume_id == resume_id
@@ -408,6 +408,84 @@ def _check_and_update_resume_status(db: Session, resume_id: UUID):
         if resume:
             resume.status = ResumeStatus.PENDING_HR_DECISION
             db.commit()
+            
+            _send_hr_review_notification(db, resume, reviews)
+
+
+def _send_hr_review_notification(db: Session, resume: Resume, reviews: List[DepartmentReview]):
+    """
+    发送HR审核通知邮件
+    """
+    try:
+        from app.services.mail_service import MailService
+        from app.models.models import SystemConfig
+        
+        hr_users = db.query(User).filter(
+            User.role == UserRole.HR,
+            User.is_active == True
+        ).all()
+        
+        if not hr_users:
+            return
+        
+        mail_service = MailService(db)
+        if not mail_service.config.is_valid():
+            return
+        
+        system_config = db.query(SystemConfig).first()
+        frontend_url = system_config.frontend_url if system_config else "http://localhost:5173"
+        
+        recommend_count = sum(1 for r in reviews if r.recommendation == ReviewRecommendation.RECOMMEND)
+        not_recommend_count = sum(1 for r in reviews if r.recommendation == ReviewRecommendation.NOT_RECOMMEND)
+        
+        overall_scores = [r.overall_score for r in reviews if r.overall_score is not None]
+        avg_score = sum(overall_scores) / len(overall_scores) if overall_scores else 0
+        
+        position = resume.position
+        
+        for hr in hr_users:
+            if not hr.email:
+                continue
+                
+            review_url = f"{frontend_url}/resumes/{resume.id}"
+            
+            subject = f"【HR审核通知】部门评审完成 - {resume.candidate_name}"
+            
+            html_content = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <h2 style="color: #1890ff;">HR 审核通知</h2>
+                    <p>尊敬的 {hr.full_name or 'HR'}，</p>
+                    <p>候选人 <strong>{resume.candidate_name}</strong> 的部门评审已完成，请进行最终审核：</p>
+                    
+                    <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                        <p><strong>应聘岗位：</strong>{position.title if position else '未知'}</p>
+                        <p><strong>匹配度评分：</strong>{resume.match_score}分</p>
+                        <p><strong>部门评审结果：</strong></p>
+                        <ul>
+                            <li>推荐：{recommend_count}人</li>
+                            <li>不推荐：{not_recommend_count}人</li>
+                            <li>平均综合评分：{avg_score:.1f}分</li>
+                        </ul>
+                    </div>
+                    
+                    <p>请点击下方链接查看详情并进行最终决策：</p>
+                    <p style="text-align: center; margin: 30px 0;">
+                        <a href="{review_url}" style="background-color: #52c41a; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">立即审核</a>
+                    </p>
+                    
+                    <p style="color: #999; font-size: 12px;">此邮件由系统自动发送，请勿直接回复。</p>
+                </div>
+            </body>
+            </html>
+            """
+            
+            mail_service._send_email(hr.email, subject, html_content)
+            
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to send HR review notification: {e}")
 
 
 def aggregate_department_reviews(db: Session, resume_id: UUID) -> Dict[str, Any]:

@@ -337,12 +337,18 @@ class CodingTestStatus(str, enum.Enum):
     PUBLISHED = "published"
     CLOSED = "closed"
 
+class CodingTestType(str, enum.Enum):
+    ALGORITHM = "algorithm"
+    CHOICE = "choice"
+    ESSAY = "essay"
+
 class CodingTest(Base):
     __tablename__ = "coding_tests"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     title = Column(String, nullable=False)
-    description = Column(Text, nullable=False)
+    description = Column(Text)
+    test_type = Column(String(20), default="algorithm")
     difficulty = Column(String, default="intermediate")
     language = Column(String, default="javascript")
     starter_code = Column(Text)
@@ -351,6 +357,10 @@ class CodingTest(Base):
     memory_limit_mb = Column(Integer, default=256)
     public_token = Column(String, unique=True, index=True, nullable=False)
     status = Column(Enum(CodingTestStatus), default=CodingTestStatus.DRAFT)
+    question_bank_id = Column(UUID(as_uuid=True), ForeignKey("question_banks.id"), nullable=True)
+    questions = Column(JSON)
+    question_generation_status = Column(String(20), default="pending")
+    duration_minutes = Column(Integer, default=60)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     resume_id = Column(UUID(as_uuid=True), ForeignKey("resumes.id"), nullable=True)
     position_id = Column(UUID(as_uuid=True), ForeignKey("positions.id"), nullable=True)
@@ -360,6 +370,7 @@ class CodingTest(Base):
     creator = relationship("User")
     resume = relationship("Resume")
     position = relationship("Position")
+    question_bank = relationship("QuestionBank")
     submissions = relationship("CodingSubmission", back_populates="coding_test")
 
 class CodingSubmissionStatus(str, enum.Enum):
@@ -374,8 +385,9 @@ class CodingSubmission(Base):
     coding_test_id = Column(UUID(as_uuid=True), ForeignKey("coding_tests.id"))
     candidate_name = Column(String)
     candidate_email = Column(String)
-    language = Column(String, default="javascript")
-    code = Column(Text, nullable=False)
+    language = Column(String)
+    code = Column(Text)
+    answers = Column(JSON)
     run_result = Column(JSON)
     passed = Column(Boolean, default=False)
     score = Column(Integer, default=0)

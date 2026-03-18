@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Card, Form, Input, Modal, Select, Space, Table, Tag, message, Tooltip, Typography, Popconfirm } from 'antd';
+import { Button, Card, Form, Input, Modal, Select, Space, Table, Tag, message, Tooltip, Typography, Popconfirm, InputNumber, Divider } from 'antd';
 import { PlusOutlined, LinkOutlined, SendOutlined, StopOutlined, EyeOutlined, EditOutlined, ImportOutlined, DeleteOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import ReactMarkdown from 'react-markdown';
@@ -30,6 +30,12 @@ const defaultTestCases = [
   { input: [[1, 2, 3], 2], expected: 1 }
 ];
 
+const testTypeLabels: Record<string, { label: string; color: string }> = {
+  algorithm: { label: '算法', color: 'blue' },
+  choice: { label: '选择题', color: 'green' },
+  essay: { label: '简答题', color: 'orange' },
+};
+
 const CodingTestsList: React.FC = () => {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -45,34 +51,62 @@ const CodingTestsList: React.FC = () => {
   const [selectedTest, setSelectedTest] = useState<any>(null);
   const [starterCodeLanguage, setStarterCodeLanguage] = useState('javascript');
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [questionBanks, setQuestionBanks] = useState<any[]>([]);
+  const [testType, setTestType] = useState<string>('algorithm');
 
-  const fetchList = async () => {
-    setLoading(true);
+  const fetchList = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await request.get('/coding-tests');
       setData(res);
     } catch (e) {
-      message.error('获取笔试列表失败');
+      if (!silent) message.error('获取笔试列表失败');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
+    }
+  };
+
+  const fetchQuestionBanks = async () => {
+    try {
+      const res = await request.get('/question-banks');
+      setQuestionBanks(res || []);
+    } catch (e) {
+      console.error('获取题库列表失败');
     }
   };
 
   useEffect(() => {
     fetchList();
+    fetchQuestionBanks();
   }, []);
+
+  useEffect(() => {
+    const hasGenerating = data.some(item => 
+      item.test_type !== 'algorithm' && item.question_generation_status === 'generating'
+    );
+    if (!hasGenerating) return;
+    
+    const timer = setInterval(() => {
+      fetchList(true);
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [data]);
 
   const handleCreate = () => {
     form.resetFields();
     setEditingId(null);
     setStarterCodeLanguage('javascript');
+    setTestType('algorithm');
     form.setFieldsValue({
       leetcode_url: '',
+      test_type: 'algorithm',
       language: 'javascript',
       difficulty: 'intermediate',
       status: 'draft',
       starter_code: starterCodeByLanguage.javascript,
       test_cases: JSON.stringify(defaultTestCases, null, 2),
+      duration_minutes: 60,
+      question_count: 10,
     });
     setOpen(true);
   };
@@ -81,34 +115,63 @@ const CodingTestsList: React.FC = () => {
     try {
       const values = await form.validateFields();
       setSubmitting(true);
+      
       let testCases: any[] = [];
-      try {
-        testCases = values.test_cases ? JSON.parse(values.test_cases) : [];
-      } catch (e) {
-        message.error('测试用例 JSON 格式不正确');
-        setSubmitting(false);
-        return;
+      if (values.test_type === 'algorithm') {
+        try {
+          testCases = values.test_cases ? JSON.parse(values.test_cases) : [];
+        } catch (e) {
+          message.error('测试用例 JSON 格式不正确');
+          setSubmitting(false);
+          return;
+        }
       }
-      const payload = {
+      
+      const payload: any = {
         title: values.title,
         description: values.description,
+        test_type: values.test_type,
         difficulty: values.difficulty,
-        language: values.language,
-        starter_code: values.starter_code,
-        test_cases: testCases,
-        time_limit_ms: values.time_limit_ms,
-        memory_limit_mb: values.memory_limit_mb,
+        duration_minutes: values.duration_minutes,
         status: values.status,
       };
+
+      if (values.test_type === 'algorithm') {
+        payload.language = values.language;
+        payload.starter_code = values.starter_code;
+        payload.test_cases = testCases;
+        payload.time_limit_ms = values.time_limit_ms;
+        payload.memory_limit_mb = values.memory_limit_mb;
+      } else {
+        payload.question_bank_id = values.question_bank_id;
+      }
+
       if (editingId) {
         await request.put(`/coding-tests/${editingId}`, payload);
         message.success('更新成功');
+        setOpen(false);
+        fetchList();
       } else {
-        await request.post('/coding-tests', payload);
-        message.success('创建成功');
+        const created = await request.post('/coding-tests', payload);
+        message.success('创建成功，正在生成题目...');
+        setOpen(false);
+        fetchList();
+        
+        if (values.test_type !== 'algorithm' && values.question_bank_id) {
+          try {
+            await request.post(`/coding-tests/${created.id}/generate-questions`, null, {
+              params: {
+                question_bank_id: values.question_bank_id,
+                test_type: values.test_type,
+                count: values.question_count || 10,
+              },
+            });
+            fetchList();
+          } catch (e) {
+            console.error('生成题目失败', e);
+          }
+        }
       }
-      setOpen(false);
-      fetchList();
     } catch (e) {
       if ((e as any)?.errorFields) return;
       message.error(editingId ? '更新失败' : '创建失败');
@@ -125,6 +188,11 @@ const CodingTestsList: React.FC = () => {
       form.setFieldsValue({ starter_code: nextTemplate });
     }
     setStarterCodeLanguage(lang);
+  };
+
+  const handleTestTypeChange = (type: string) => {
+    setTestType(type);
+    form.setFieldsValue({ test_type: type });
   };
 
   const copyLink = async (token: string) => {
@@ -201,6 +269,8 @@ const CodingTestsList: React.FC = () => {
     try {
       const res = await request.get(`/coding-tests/${record.id}`);
       setEditingId(record.id);
+      const type = res.test_type || 'algorithm';
+      setTestType(type);
       const lang = res.language || 'javascript';
       setStarterCodeLanguage(lang);
       form.resetFields();
@@ -208,6 +278,7 @@ const CodingTestsList: React.FC = () => {
         leetcode_url: '',
         title: res.title,
         description: res.description,
+        test_type: type,
         difficulty: res.difficulty || 'intermediate',
         language: lang,
         status: res.status || 'draft',
@@ -215,6 +286,9 @@ const CodingTestsList: React.FC = () => {
         memory_limit_mb: res.memory_limit_mb ?? 256,
         starter_code: res.starter_code || starterCodeByLanguage[lang] || '',
         test_cases: JSON.stringify(res.test_cases || [], null, 2),
+        question_bank_id: res.question_bank_id,
+        duration_minutes: res.duration_minutes || 60,
+        question_count: res.questions?.length || 10,
       });
       setOpen(true);
     } catch (e) {
@@ -249,10 +323,38 @@ const CodingTestsList: React.FC = () => {
     { title: '标题', dataIndex: 'title', key: 'title' },
     {
       title: '类型',
-      key: 'type',
-      render: () => <Tag color="blue" style={{ border: 'none' }}>算法</Tag>,
+      dataIndex: 'test_type',
+      key: 'test_type',
+      render: (type: string) => {
+        const info = testTypeLabels[type] || { label: type, color: 'default' };
+        return <Tag color={info.color} style={{ border: 'none' }}>{info.label}</Tag>;
+      },
     },
-    { title: '语言', dataIndex: 'language', key: 'language' },
+    { title: '语言', dataIndex: 'language', key: 'language', render: (v: string) => v || '-' },
+    {
+      title: '时长',
+      dataIndex: 'duration_minutes',
+      key: 'duration_minutes',
+      render: (v: number) => v ? `${v}分钟` : '-',
+    },
+    {
+      title: '题目状态',
+      dataIndex: 'question_generation_status',
+      key: 'question_generation_status',
+      render: (s: string, record: any) => {
+        if (record.test_type === 'algorithm') {
+          return <Tag color="green" style={{ border: 'none' }}>已完成</Tag>;
+        }
+        const map: any = {
+          pending: { text: '等待生成', color: 'default' },
+          generating: { text: '生成中', color: 'processing' },
+          completed: { text: '已完成', color: 'green' },
+          failed: { text: '生成失败', color: 'red' },
+        };
+        const info = map[s] || { text: s || '等待生成', color: 'default' };
+        return <Tag color={info.color} style={{ border: 'none' }}>{info.text}</Tag>;
+      },
+    },
     {
       title: '状态',
       dataIndex: 'status',
@@ -420,7 +522,20 @@ const CodingTestsList: React.FC = () => {
                 key: 'passed',
                 render: (_: any, r: any) => r.passed ? <Tag color="green" style={{ border: 'none' }}>通过</Tag> : <Tag color="red" style={{ border: 'none' }}>未通过</Tag>,
               },
-              { title: '状态', dataIndex: 'status', key: 'status' },
+              {
+                title: '状态',
+                dataIndex: 'status',
+                key: 'status',
+                render: (s: string) => {
+                  const map: any = {
+                    submitted: { text: '已提交', color: 'blue' },
+                    evaluating: { text: '评价中', color: 'processing' },
+                    evaluated: { text: '已评价', color: 'green' },
+                  };
+                  const info = map[s] || { text: s, color: 'default' };
+                  return <Tag color={info.color} style={{ border: 'none' }}>{info.text}</Tag>;
+                },
+              },
               {
                 title: '操作',
                 key: 'action',
@@ -435,35 +550,130 @@ const CodingTestsList: React.FC = () => {
             <Card style={{ borderRadius: 12 }}>
               <Space direction="vertical" style={{ width: '100%' }} size="middle">
                 <Space>
-                  <Tag style={{ border: 'none' }}>{selectedSubmission.language}</Tag>
+                  {selectedSubmission.language && <Tag style={{ border: 'none' }}>{selectedSubmission.language}</Tag>}
                   <Tag color={selectedSubmission.passed ? 'green' : 'red'} style={{ border: 'none' }}>
                     {selectedSubmission.passed ? '通过' : '未通过'}
                   </Tag>
                   <Text type="secondary">得分 {selectedSubmission.score ?? 0}</Text>
                 </Space>
 
-                <div>
-                  <Text strong>代码</Text>
-                  <div style={{ marginTop: 8 }}>
-                    <CodeEditor
-                      value={selectedSubmission.code || ''}
-                      language={selectedSubmission.language || 'javascript'}
-                      height={320}
-                      readOnly
-                    />
+                {selectedSubmission.code && (
+                  <div>
+                    <Text strong>代码</Text>
+                    <div style={{ marginTop: 8 }}>
+                      <CodeEditor
+                        value={selectedSubmission.code || ''}
+                        language={selectedSubmission.language || 'javascript'}
+                        height={320}
+                        readOnly
+                      />
+                    </div>
                   </div>
-                </div>
+                )}
 
-                <div>
-                  <Text strong>AI 评价</Text>
-                  <div style={{ marginTop: 8 }}>
-                    {selectedSubmission.ai_evaluation ? (
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{selectedSubmission.ai_evaluation}</ReactMarkdown>
-                    ) : (
-                      <Text type="secondary">暂未生成</Text>
-                    )}
+                {selectedSubmission.answers && (
+                  <div>
+                    <Text strong>答题详情</Text>
+                    <div style={{ marginTop: 8 }}>
+                      {selectedTest?.questions?.map((q: any, i: number) => {
+                        const userAnswer = selectedSubmission.answers.find((a: any) => a.question_id === q.id);
+                        const isCorrect = userAnswer?.answer === q.correct_answer;
+                        const isChoice = selectedTest?.test_type === 'choice';
+                        const isEssay = selectedTest?.test_type === 'essay';
+                        
+                        const evaluation = selectedSubmission.run_result?.evaluations?.find((e: any) => e.question_id === q.id);
+                        const questionScore = evaluation?.score;
+                        const maxScore = evaluation?.max_score || q.max_score || 10;
+                        
+                        return (
+                          <Card 
+                            key={i} 
+                            size="small" 
+                            style={{ 
+                              marginBottom: 12, 
+                              borderLeft: `4px solid ${isChoice ? (isCorrect ? '#10B981' : '#EF4444') : (questionScore !== undefined ? (questionScore >= maxScore * 0.6 ? '#10B981' : '#EF4444') : '#9CA3AF')}`,
+                              backgroundColor: isChoice ? (isCorrect ? '#F0FDF4' : '#FEF2F2') : (questionScore !== undefined ? (questionScore >= maxScore * 0.6 ? '#F0FDF4' : '#FEF2F2') : '#F9FAFB')
+                            }}
+                          >
+                            <Space direction="vertical" style={{ width: '100%' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <Text strong>{i + 1}. {q.question}</Text>
+                                {isEssay && questionScore !== undefined && (
+                                  <Tag color={questionScore >= maxScore * 0.6 ? 'green' : 'orange'} style={{ border: 'none' }}>
+                                    得分: {questionScore}/{maxScore}
+                                  </Tag>
+                                )}
+                              </div>
+                              
+                              {isChoice && q.options && (
+                                <div style={{ marginTop: 8 }}>
+                                  {q.options.map((opt: any) => {
+                                    const isUserChoice = userAnswer?.answer === opt.label;
+                                    const isCorrectOption = q.correct_answer === opt.label;
+                                    
+                                    return (
+                                      <div 
+                                        key={opt.label}
+                                        style={{
+                                          padding: '4px 8px',
+                                          marginBottom: 4,
+                                          borderRadius: 4,
+                                          backgroundColor: isCorrectOption ? '#DCFCE7' : (isUserChoice && !isCorrect ? '#FEE2E2' : 'transparent'),
+                                          border: isCorrectOption ? '1px solid #10B981' : (isUserChoice && !isCorrect ? '1px solid #EF4444' : '1px solid transparent')
+                                        }}
+                                      >
+                                        <Space>
+                                          <Text strong>{opt.label}.</Text>
+                                          <Text>{opt.text}</Text>
+                                          {isCorrectOption && <Tag color="green" style={{ marginLeft: 8, border: 'none' }}>正确答案</Tag>}
+                                          {isUserChoice && !isCorrect && <Tag color="red" style={{ marginLeft: 8, border: 'none' }}>你的选择</Tag>}
+                                        </Space>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                              
+                              {!isChoice && (
+                                <div style={{ marginTop: 8 }}>
+                                  <div style={{ marginBottom: 8 }}>
+                                    <Text type="secondary">用户答案：</Text>
+                                    <Text>{userAnswer?.answer || '未作答'}</Text>
+                                  </div>
+                                  {q.reference_answer && (
+                                    <div>
+                                      <Text type="secondary">参考答案：</Text>
+                                      <Text type="success">{q.reference_answer}</Text>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              
+                              {q.explanation && (
+                                <div style={{ marginTop: 8, padding: '8px 12px', backgroundColor: '#F3F4F6', borderRadius: 4 }}>
+                                  <Text type="secondary">解析：{q.explanation}</Text>
+                                </div>
+                              )}
+                            </Space>
+                          </Card>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {(selectedTest?.test_type === 'algorithm' || selectedTest?.test_type === 'essay') && (
+                  <div>
+                    <Text strong>AI 评价</Text>
+                    <div style={{ marginTop: 8 }}>
+                      {selectedSubmission.ai_evaluation ? (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{selectedSubmission.ai_evaluation}</ReactMarkdown>
+                      ) : (
+                        <Text type="secondary">暂未生成</Text>
+                      )}
+                    </div>
+                  </div>
+                )}
               </Space>
             </Card>
           )}
@@ -471,7 +681,7 @@ const CodingTestsList: React.FC = () => {
       </Modal>
 
       <Modal
-        title={editingId ? '编辑算法笔试' : '创建算法笔试'}
+        title={editingId ? '编辑笔试' : '创建笔试'}
         open={open}
         onOk={handleSave}
         onCancel={() => setOpen(false)}
@@ -481,18 +691,22 @@ const CodingTestsList: React.FC = () => {
         width={820}
       >
         <Form form={form} layout="vertical">
-          <Form.Item name="leetcode_url" label="力扣题目链接">
-            <Space.Compact style={{ width: '100%' }}>
-              <Input placeholder="https://leetcode.cn/problems/two-sum/" />
-              <Button icon={<ImportOutlined />} onClick={importFromLeetCode} loading={importingLeetcode}>一键导入</Button>
-            </Space.Compact>
+          <Form.Item name="test_type" label="笔试类型" rules={[{ required: true }]}>
+            <Select onChange={handleTestTypeChange}>
+              <Select.Option value="algorithm">算法题</Select.Option>
+              <Select.Option value="choice">选择题</Select.Option>
+              <Select.Option value="essay">简答题</Select.Option>
+            </Select>
           </Form.Item>
+
           <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
-            <Input placeholder="例如：二分查找变体" />
+            <Input placeholder="例如：前端开发笔试" />
           </Form.Item>
-          <Form.Item name="description" label="题目描述" rules={[{ required: true, message: '请输入题目描述' }]}>
-            <TextArea rows={6} placeholder="粘贴题目描述（可包含示例/约束/提示）" />
+          
+          <Form.Item name="description" label="描述">
+            <TextArea rows={3} placeholder="笔试说明（可选）" />
           </Form.Item>
+
           <Space style={{ width: '100%' }} size="large">
             <Form.Item name="difficulty" label="难度" style={{ flex: 1 }}>
               <Select
@@ -503,15 +717,8 @@ const CodingTestsList: React.FC = () => {
                 ]}
               />
             </Form.Item>
-            <Form.Item name="language" label="语言" style={{ flex: 1 }}>
-              <Select
-                options={[
-                  { value: 'javascript', label: 'JavaScript' },
-                  { value: 'python', label: 'Python' },
-                  { value: 'java', label: 'Java' },
-                ]}
-                onChange={handleLanguageChange}
-              />
+            <Form.Item name="duration_minutes" label="时长(分钟)" style={{ flex: 1 }}>
+              <InputNumber min={10} max={180} style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item name="status" label="状态" style={{ flex: 1 }}>
               <Select
@@ -522,22 +729,72 @@ const CodingTestsList: React.FC = () => {
               />
             </Form.Item>
           </Space>
-          <Space style={{ width: '100%' }} size="large">
-            <Form.Item name="time_limit_ms" label="时限(ms)" style={{ flex: 1 }}>
-              <Input placeholder="3000" />
-            </Form.Item>
-            <Form.Item name="memory_limit_mb" label="内存(MB)" style={{ flex: 1 }}>
-              <Input placeholder="256" />
-            </Form.Item>
-          </Space>
-          <Form.Item label="初始代码（必须包含 solution 函数）">
-            <Form.Item name="starter_code" noStyle getValueFromEvent={(v) => v}>
-              <CodeEditor language={form.getFieldValue('language') || 'javascript'} height={260} />
-            </Form.Item>
-          </Form.Item>
-          <Form.Item name="test_cases" label="测试用例（JSON 数组）" extra="格式：[{ input: [args...], expected: any }, ...]">
-            <TextArea rows={6} style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }} />
-          </Form.Item>
+
+          {testType === 'algorithm' && (
+            <>
+              <Divider>算法题设置</Divider>
+              
+              <Form.Item name="leetcode_url" label="力扣题目链接">
+                <Space.Compact style={{ width: '100%' }}>
+                  <Input placeholder="https://leetcode.cn/problems/two-sum/" />
+                  <Button icon={<ImportOutlined />} onClick={importFromLeetCode} loading={importingLeetcode}>一键导入</Button>
+                </Space.Compact>
+              </Form.Item>
+              
+              <Form.Item name="language" label="语言">
+                <Select
+                  options={[
+                    { value: 'javascript', label: 'JavaScript' },
+                    { value: 'python', label: 'Python' },
+                    { value: 'java', label: 'Java' },
+                  ]}
+                  onChange={handleLanguageChange}
+                />
+              </Form.Item>
+              
+              <Space style={{ width: '100%' }} size="large">
+                <Form.Item name="time_limit_ms" label="时限(ms)" style={{ flex: 1 }}>
+                  <Input placeholder="3000" />
+                </Form.Item>
+                <Form.Item name="memory_limit_mb" label="内存(MB)" style={{ flex: 1 }}>
+                  <Input placeholder="256" />
+                </Form.Item>
+              </Space>
+              
+              <Form.Item label="初始代码（必须包含 solution 函数）">
+                <Form.Item name="starter_code" noStyle getValueFromEvent={(v) => v}>
+                  <CodeEditor language={form.getFieldValue('language') || 'javascript'} height={260} />
+                </Form.Item>
+              </Form.Item>
+              
+              <Form.Item name="test_cases" label="测试用例（JSON 数组）" extra="格式：[{ input: [args...], expected: any }, ...]">
+                <TextArea rows={6} style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }} />
+              </Form.Item>
+            </>
+          )}
+
+          {(testType === 'choice' || testType === 'essay') && (
+            <>
+              <Divider>题目设置</Divider>
+              
+              <Space style={{ width: '100%' }} size="large">
+                <Form.Item name="question_bank_id" label="题库" rules={[{ required: true, message: '请选择题库' }]} style={{ flex: 1 }}>
+                  <Select placeholder="请选择题库">
+                    {questionBanks.map((bank: any) => (
+                      <Select.Option key={bank.id} value={bank.id}>{bank.name}</Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+                <Form.Item name="question_count" label="题目数量" style={{ flex: 1 }}>
+                  <InputNumber min={1} max={50} style={{ width: '100%' }} />
+                </Form.Item>
+              </Space>
+              
+              <div style={{ color: '#64748B', fontSize: 13 }}>
+                创建后将自动从题库随机抽取题目。如题库中没有对应类型的题目，将抽取题库中的所有题目。
+              </div>
+            </>
+          )}
         </Form>
       </Modal>
     </div>
