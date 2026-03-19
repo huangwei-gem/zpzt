@@ -188,12 +188,19 @@ const PublicJobDetail: React.FC = () => {
                 name="file"
                 label="简历附件"
                 rules={[{ required: true, message: '请上传您的简历文件' }]}
-                extra="支持 PDF, Word, Txt 格式，大小不超过 10MB"
+                extra="仅支持 PDF 格式，大小不超过 10MB"
               >
                 <Upload 
                   maxCount={1}
-                  beforeUpload={() => false}
-                  accept=".pdf,.doc,.docx,.txt"
+                  beforeUpload={(file) => {
+                    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+                    if (!isPdf) {
+                      message.error('只允许上传 PDF 格式的文件');
+                      return Upload.LIST_IGNORE;
+                    }
+                    return false;
+                  }}
+                  accept=".pdf"
                 >
                   <Button icon={<UploadOutlined />}>上传简历</Button>
                 </Upload>

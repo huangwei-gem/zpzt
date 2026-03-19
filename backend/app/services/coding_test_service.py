@@ -371,12 +371,12 @@ def _read_file_content(file_path: str) -> str:
     
     if ext == 'pdf':
         try:
-            import fitz
-            doc = fitz.open(file_path)
-            text = ""
-            for page in doc:
-                text += page.get_text()
-            doc.close()
+            import PyPDF2
+            with open(file_path, 'rb') as f:
+                reader = PyPDF2.PdfReader(f)
+                text = ""
+                for page in reader.pages:
+                    text += page.extract_text() or ""
             return text
         except Exception as e:
             print(f"PDF read error: {e}")

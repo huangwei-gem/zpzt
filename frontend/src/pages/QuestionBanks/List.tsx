@@ -1,12 +1,12 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { Table, Button, Space, message, Tag, Modal, Form, Input, Select, Upload, Tooltip, Typography, Drawer, Descriptions, List, Card, Divider, Spin } from 'antd';
-import { PlusOutlined, UploadOutlined, DeleteOutlined, EyeOutlined, DownloadOutlined, FilePdfOutlined, FileWordOutlined, FileTextOutlined, FileMarkdownOutlined } from '@ant-design/icons';
+import React, { useEffect, useState } from 'react';
+import { Table, Button, Space, message, Tag, Modal, Form, Input, Select, Upload, Tooltip, Typography, Drawer, Divider, Spin } from 'antd';
+import { PlusOutlined, UploadOutlined, DeleteOutlined, EyeOutlined, DownloadOutlined, FileWordOutlined, FileTextOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { renderAsync } from 'docx-preview';
+import mammoth from 'mammoth';
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 
 const QuestionBanksList: React.FC = () => {
   const [data, setData] = useState([]);
@@ -23,7 +23,8 @@ const QuestionBanksList: React.FC = () => {
   // File Preview State
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const docxContainerRef = useRef<HTMLDivElement>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [docxHtml, setDocxHtml] = useState<string>('');
 
   const fetchQuestionBanks = async () => {
     setLoading(true);
@@ -51,52 +52,42 @@ const QuestionBanksList: React.FC = () => {
     fetchPositions();
   }, []);
 
-  // Load file content when drawer opens
   useEffect(() => {
     if (isDrawerVisible && viewingRecord?.source_file) {
       loadFile(viewingRecord.source_file);
-    } else {
-      setFileContent(null); // Reset content
     }
   }, [isDrawerVisible, viewingRecord]);
 
   const loadFile = async (filePath: string) => {
     setPreviewLoading(true);
+    setPreviewError(null);
+    setDocxHtml('');
     const ext = filePath.split('.').pop()?.toLowerCase();
     const url = `/${filePath}`;
     
     try {
       if (ext === 'md' || ext === 'txt') {
         const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
         const text = await res.text();
         setFileContent(text);
       } else if (ext === 'docx') {
         const res = await fetch(url);
-        const blob = await res.blob();
-        if (docxContainerRef.current) {
-           docxContainerRef.current.innerHTML = ''; // Clear previous content
-           await renderAsync(blob, docxContainerRef.current, undefined, {
-             inWrapper: false, // Don't wrap in extra div if possible, check docx-preview docs
-             ignoreWidth: false,
-             ignoreHeight: false,
-             ignoreFonts: false,
-             breakPages: true,
-             ignoreLastRenderedPageBreak: true,
-             experimental: false,
-             trimXmlDeclaration: true,
-             useBase64URL: false,
-             renderChanges: false,
-             renderHeaders: true,
-             renderFooters: true,
-             renderFootnotes: true,
-             renderEndnotes: true,
-             debug: false,
-           });
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        const arrayBuffer = await res.arrayBuffer();
+        const result = await mammoth.convertToHtml({ arrayBuffer });
+        setDocxHtml(result.value);
+        if (result.messages.length > 0) {
+          console.log('Mammoth warnings:', result.messages);
         }
       }
     } catch (err) {
       console.error('File load error:', err);
-      // message.error('加载文件预览失败');
+      setPreviewError(`文件加载失败: ${err instanceof Error ? err.message : '未知错误'}`);
     } finally {
       setPreviewLoading(false);
     }
@@ -113,6 +104,9 @@ const QuestionBanksList: React.FC = () => {
     try {
       const res = await request.get(`/question-banks/${record.id}`);
       setViewingRecord(res);
+      setFileContent(null);
+      setPreviewError(null);
+      setDocxHtml('');
       setIsDrawerVisible(true);
     } catch (error) {
       message.error('获取题库详情失败');
@@ -131,8 +125,9 @@ const QuestionBanksList: React.FC = () => {
           await request.delete(`/question-banks/${id}`);
           message.success('删除成功');
           fetchQuestionBanks();
-        } catch (error) {
-          message.error('删除失败');
+        } catch (error: any) {
+          const errorMsg = error?.response?.data?.detail || '删除失败';
+          message.error(errorMsg);
         }
       },
     });
@@ -155,8 +150,9 @@ const QuestionBanksList: React.FC = () => {
           message.success(`成功删除 ${selectedRowKeys.length} 个题库`);
           setSelectedRowKeys([]);
           fetchQuestionBanks();
-        } catch (error) {
-          message.error('批量删除失败');
+        } catch (error: any) {
+          const errorMsg = error?.response?.data?.detail || '批量删除失败';
+          message.error(errorMsg);
         }
       },
     });
@@ -296,6 +292,27 @@ const QuestionBanksList: React.FC = () => {
       );
     }
 
+    if (previewError) {
+      return (
+        <div style={{ 
+          height: '300px', 
+          display: 'flex', 
+          flexDirection: 'column', 
+          alignItems: 'center', 
+          justifyContent: 'center',
+          background: '#F8FAFC',
+          borderRadius: '8px',
+          border: '1px dashed #E2E8F0'
+        }}>
+          <FileWordOutlined style={{ fontSize: '64px', color: '#94A3B8', marginBottom: '16px' }} />
+          <Text type="secondary" style={{ marginBottom: '16px' }}>{previewError}</Text>
+          <Button type="primary" icon={<DownloadOutlined />} href={fileUrl} download>
+            下载文件查看
+          </Button>
+        </div>
+      );
+    }
+
     if (ext === 'pdf') {
       return (
         <iframe 
@@ -334,17 +351,59 @@ const QuestionBanksList: React.FC = () => {
     }
 
     if (ext === 'docx') {
-       return (
-         <div 
-           ref={docxContainerRef} 
-           style={{ 
-             background: '#fff', 
-             padding: '24px', 
-             height: 'calc(100vh - 250px)', 
-             overflowY: 'auto' 
-           }} 
-         />
-       );
+      if (previewLoading) {
+        return (
+          <div style={{ padding: 40, textAlign: 'center' }}>
+            <Spin size="large" />
+            <div style={{ marginTop: 8, color: '#64748B' }}>加载预览中...</div>
+          </div>
+        );
+      }
+      if (previewError) {
+        return (
+          <div style={{ 
+            height: '300px', 
+            display: 'flex', 
+            flexDirection: 'column', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+          }}>
+            <FileWordOutlined style={{ fontSize: '64px', color: '#94A3B8', marginBottom: '16px' }} />
+            <Text type="secondary" style={{ marginBottom: '16px' }}>{previewError}</Text>
+            <Button type="primary" icon={<DownloadOutlined />} href={fileUrl} download>
+              下载文件查看
+            </Button>
+          </div>
+        );
+      }
+      if (!docxHtml) {
+        return (
+          <div style={{ 
+            height: '300px', 
+            display: 'flex', 
+            flexDirection: 'column', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+          }}>
+            <FileWordOutlined style={{ fontSize: '64px', color: '#94A3B8', marginBottom: '16px' }} />
+            <Text type="secondary" style={{ marginBottom: '16px' }}>Word 文档无法预览，请下载后查看</Text>
+            <Button type="primary" icon={<DownloadOutlined />} href={fileUrl} download>
+              下载文件查看
+            </Button>
+          </div>
+        );
+      }
+      return (
+        <div 
+          style={{ 
+            background: '#fff', 
+            padding: '24px', 
+            minHeight: 'calc(100vh - 250px)', 
+            overflowY: 'auto' 
+          }}
+          dangerouslySetInnerHTML={{ __html: docxHtml }}
+        />
+      );
     }
     
     // For doc (old format) and others

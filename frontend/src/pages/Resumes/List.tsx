@@ -469,11 +469,17 @@ const ResumesList: React.FC = () => {
       });
     },
     beforeUpload: (file: any) => {
+      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+      if (!isPdf) {
+        message.error('只允许上传 PDF 格式的文件');
+        return Upload.LIST_IGNORE;
+      }
       setFileList((prev) => [...prev, file]);
       return false;
     },
     fileList,
-    multiple: true
+    multiple: true,
+    accept: '.pdf'
   };
 
   const columns = [
@@ -738,7 +744,7 @@ const ResumesList: React.FC = () => {
             name="file"
             label="简历文件"
             rules={[{ required: true, message: '请上传简历文件' }]}
-            extra="支持批量上传 PDF, Word, Txt 格式"
+            extra="仅支持 PDF 格式，可批量上传"
           >
             <Upload {...uploadProps} maxCount={10}>
               <Button icon={<UploadOutlined />} size="large">选择文件（可多选）</Button>

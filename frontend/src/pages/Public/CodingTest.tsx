@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Card, Form, Input, Space, Spin, Tag, Typography, message, Table, Radio, Checkbox, InputNumber } from 'antd';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { Button, Card, Form, Input, Space, Spin, Tag, Typography, message, Table, Radio, Checkbox, Modal, Progress, Badge, Tooltip, Divider } from 'antd';
 import { useParams } from 'react-router-dom';
-import { PlayCircleOutlined, SendOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { PlayCircleOutlined, SendOutlined, ClockCircleOutlined, CheckCircleOutlined, FlagOutlined, FlagFilled, UserOutlined, MailOutlined, LoginOutlined, TrophyOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import CodeEditor from '../../components/CodeEditor';
 
@@ -12,6 +12,12 @@ const testTypeLabels: Record<string, { label: string; color: string }> = {
   algorithm: { label: '算法笔试', color: 'blue' },
   choice: { label: '选择题', color: 'green' },
   essay: { label: '简答题', color: 'orange' },
+};
+
+const difficultyLabels: Record<string, string> = {
+  easy: '简单',
+  intermediate: '中等',
+  hard: '困难',
 };
 
 const PublicCodingTest: React.FC = () => {
@@ -25,10 +31,24 @@ const PublicCodingTest: React.FC = () => {
   const [submission, setSubmission] = useState<any>(null);
   const [form] = Form.useForm();
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [markedQuestions, setMarkedQuestions] = useState<Set<string>>(new Set());
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [started, setStarted] = useState(false);
+  const [candidateInfo, setCandidateInfo] = useState<{ name: string; email: string } | null>(null);
+  const [showResult, setShowResult] = useState(false);
+  const questionRefs = useRef<Record<string, HTMLElement | null>>({});
 
-  const storageKey = useMemo(() => (token ? `codingtest:${token}:code` : ''), [token]);
-  const answersKey = useMemo(() => (token ? `codingtest:${token}:answers` : ''), [token]);
+  const getCandidateKey = (name: string, email: string) => `${token}:${name}:${email}`;
+  
+  const getStorageKeys = (name: string, email: string) => {
+    const key = getCandidateKey(name, email);
+    return {
+      code: `codingtest:${key}:code`,
+      answers: `codingtest:${key}:answers`,
+      marked: `codingtest:${key}:marked`,
+      startTime: `codingtest:${key}:startTime`,
+    };
+  };
 
   const fetchTest = async () => {
     if (!token) return;
@@ -36,20 +56,6 @@ const PublicCodingTest: React.FC = () => {
     try {
       const res = await request.get(`/public/coding-tests/${token}`);
       setTest(res);
-      
-      if (res.test_type === 'algorithm') {
-        const saved = storageKey ? localStorage.getItem(storageKey) : null;
-        setCode(saved || res.starter_code || '');
-      } else {
-        const savedAnswers = answersKey ? localStorage.getItem(answersKey) : null;
-        if (savedAnswers) {
-          setAnswers(JSON.parse(savedAnswers));
-        }
-      }
-      
-      if (res.duration_minutes) {
-        setTimeLeft(res.duration_minutes * 60);
-      }
     } catch (e) {
       message.error('笔试链接无效或已关闭');
     } finally {
@@ -62,14 +68,59 @@ const PublicCodingTest: React.FC = () => {
   }, [token]);
 
   useEffect(() => {
-    if (!storageKey || test?.test_type !== 'algorithm') return;
-    localStorage.setItem(storageKey, code || '');
-  }, [storageKey, code, test?.test_type]);
+    if (!candidateInfo || !test) return;
+    
+    const keys = getStorageKeys(candidateInfo.name, candidateInfo.email);
+    
+    if (test.test_type === 'algorithm') {
+      const saved = localStorage.getItem(keys.code);
+      setCode(saved || test.starter_code || '');
+    } else {
+      const savedAnswers = localStorage.getItem(keys.answers);
+      if (savedAnswers) {
+        setAnswers(JSON.parse(savedAnswers));
+      }
+      const savedMarked = localStorage.getItem(keys.marked);
+      if (savedMarked) {
+        setMarkedQuestions(new Set(JSON.parse(savedMarked)));
+      }
+    }
+    
+    const savedStartTime = localStorage.getItem(keys.startTime);
+    const duration = test.duration_minutes ? test.duration_minutes * 60 : null;
+    
+    if (savedStartTime && duration) {
+      const elapsed = Math.floor((Date.now() - parseInt(savedStartTime)) / 1000);
+      const remaining = Math.max(0, duration - elapsed);
+      setTimeLeft(remaining);
+      
+      if (remaining === 0) {
+        message.warning('考试时间已结束');
+      }
+    } else if (duration) {
+      const now = Date.now();
+      localStorage.setItem(keys.startTime, now.toString());
+      setTimeLeft(duration);
+    }
+  }, [candidateInfo, test]);
 
   useEffect(() => {
-    if (!answersKey || test?.test_type === 'algorithm') return;
-    localStorage.setItem(answersKey, JSON.stringify(answers));
-  }, [answersKey, answers, test?.test_type]);
+    if (!candidateInfo || !started || test?.test_type !== 'algorithm') return;
+    const keys = getStorageKeys(candidateInfo.name, candidateInfo.email);
+    localStorage.setItem(keys.code, code || '');
+  }, [candidateInfo, started, code, test?.test_type]);
+
+  useEffect(() => {
+    if (!candidateInfo || !started || test?.test_type === 'algorithm') return;
+    const keys = getStorageKeys(candidateInfo.name, candidateInfo.email);
+    localStorage.setItem(keys.answers, JSON.stringify(answers));
+  }, [candidateInfo, started, answers, test?.test_type]);
+
+  useEffect(() => {
+    if (!candidateInfo || !started || test?.test_type === 'algorithm') return;
+    const keys = getStorageKeys(candidateInfo.name, candidateInfo.email);
+    localStorage.setItem(keys.marked, JSON.stringify([...markedQuestions]));
+  }, [candidateInfo, started, markedQuestions, test?.test_type]);
 
   useEffect(() => {
     if (timeLeft === null || timeLeft <= 0) return;
@@ -88,6 +139,16 @@ const PublicCodingTest: React.FC = () => {
     }, 1000);
     return () => clearInterval(timer);
   }, [timeLeft]);
+
+  const handleStart = async () => {
+    try {
+      const values = await form.validateFields();
+      setCandidateInfo({ name: values.candidate_name, email: values.candidate_email });
+      setStarted(true);
+    } catch (e) {
+      // validation failed
+    }
+  };
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -116,15 +177,8 @@ const PublicCodingTest: React.FC = () => {
     }
   };
 
-  const fetchSubmission = async (submissionId: string) => {
-    if (!token) return;
-    const res = await request.get(`/public/coding-tests/${token}/submissions/${submissionId}`);
-    setSubmission(res);
-    return res;
-  };
-
-  const handleSubmit = async (isAutoSubmit = false) => {
-    if (!token) return;
+  const handleSubmit = async (forceSubmit = false) => {
+    if (!token || !candidateInfo) return;
     
     const testType = test?.test_type || 'algorithm';
     
@@ -133,28 +187,23 @@ const PublicCodingTest: React.FC = () => {
       return;
     }
     
-    if (testType === 'choice' || testType === 'essay') {
+    if ((testType === 'choice' || testType === 'essay') && !forceSubmit) {
       const questions = test?.questions || [];
       const unanswered = questions.filter((q: any) => !answers[q.id] || answers[q.id].trim() === '');
       
       if (unanswered.length > 0) {
-        if (isAutoSubmit) {
-          message.warning(`时间到，还有 ${unanswered.length} 道题目未作答`);
-        } else {
-          message.error(`还有 ${unanswered.length} 道题目未作答，请完成所有题目后再提交`);
-          return;
-        }
+        message.error(`还有 ${unanswered.length} 道题目未作答，请完成所有题目后再提交`);
+        return;
       }
     }
     
     try {
-      const values = await form.validateFields();
       setSubmitting(true);
       
       let endpoint = `/public/coding-tests/${token}/submit`;
       let payload: any = {
-        candidate_name: values.candidate_name,
-        candidate_email: values.candidate_email,
+        candidate_name: candidateInfo.name,
+        candidate_email: candidateInfo.email,
       };
       
       if (testType === 'algorithm') {
@@ -176,10 +225,15 @@ const PublicCodingTest: React.FC = () => {
       
       const res = await request.post(endpoint, payload);
       setSubmission(res);
-      message.success('提交成功');
+      setShowResult(true);
       
-      if (storageKey) localStorage.removeItem(storageKey);
-      if (answersKey) localStorage.removeItem(answersKey);
+      if (candidateInfo) {
+        const keys = getStorageKeys(candidateInfo.name, candidateInfo.email);
+        localStorage.removeItem(keys.code);
+        localStorage.removeItem(keys.answers);
+        localStorage.removeItem(keys.marked);
+        localStorage.removeItem(keys.startTime);
+      }
       setTimeLeft(0);
     } catch (e) {
       if ((e as any)?.errorFields) return;
@@ -189,16 +243,69 @@ const PublicCodingTest: React.FC = () => {
     }
   };
 
-  const onSubmitClick = () => handleSubmit(false);
+  const onSubmitClick = () => {
+    const questions = test?.questions || [];
+    const unanswered = questions.filter((q: any) => !answers[q.id] || answers[q.id].trim() === '');
+    const answered = questions.length - unanswered.length;
+    
+    if (unanswered.length === 0) {
+      handleSubmit(true);
+      return;
+    }
+    
+    Modal.confirm({
+      title: '确认提交',
+      icon: <SendOutlined />,
+      content: (
+        <div>
+          <Paragraph>您已完成 <Text strong>{answered}</Text> / <Text strong>{questions.length}</Text> 道题目</Paragraph>
+          <Paragraph type="warning">注意：还有 {unanswered.length} 道题目未作答</Paragraph>
+          {markedQuestions.size > 0 && (
+            <Paragraph type="warning">注意：有 {markedQuestions.size} 道题目已标记</Paragraph>
+          )}
+          <Paragraph>确定要提交吗？</Paragraph>
+        </div>
+      ),
+      okText: '确认提交',
+      cancelText: '继续作答',
+      onOk: () => handleSubmit(true),
+    });
+  };
 
   const handleAnswerChange = (questionId: string, answer: string) => {
     setAnswers((prev) => ({ ...prev, [questionId]: answer }));
+  };
+
+  const toggleMark = (questionId: string) => {
+    setMarkedQuestions((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(questionId)) {
+        newSet.delete(questionId);
+      } else {
+        newSet.add(questionId);
+      }
+      return newSet;
+    });
+  };
+
+  const scrollToQuestion = (questionId: string) => {
+    const el = questionRefs.current[questionId];
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
   };
 
   const resultRows = useMemo(() => {
     const results = runResult?.results || submission?.run_result?.results || [];
     return results.map((r: any) => ({ ...r, key: r.index }));
   }, [runResult, submission]);
+
+  const answerStats = useMemo(() => {
+    const questions = test?.questions || [];
+    const answered = questions.filter((q: any) => answers[q.id] && answers[q.id].trim() !== '').length;
+    const marked = markedQuestions.size;
+    return { total: questions.length, answered, marked };
+  }, [test?.questions, answers, markedQuestions]);
 
   if (loading && !test) {
     return (
@@ -213,12 +320,181 @@ const PublicCodingTest: React.FC = () => {
   const testType = test.test_type || 'algorithm';
   const typeInfo = testTypeLabels[testType] || { label: '笔试', color: 'default' };
 
-  const renderQuestions = () => {
-    const questions = test.questions || [];
+  if (showResult && submission) {
+    return (
+      <div style={{ maxWidth: 600, margin: '0 auto', padding: '24px 16px' }}>
+        <Card style={{ borderRadius: 16, textAlign: 'center' }}>
+          <div style={{ marginBottom: 32 }}>
+            {submission.passed ? (
+              <TrophyOutlined style={{ fontSize: 80, color: '#52c41a' }} />
+            ) : (
+              <CloseCircleOutlined style={{ fontSize: 80, color: '#ff4d4f' }} />
+            )}
+          </div>
+          
+          <Title level={2} style={{ marginBottom: 8 }}>
+            {submission.passed ? '恭喜通过！' : '未通过'}
+          </Title>
+          
+          <Space style={{ marginBottom: 24 }}>
+            <Tag color={typeInfo.color} style={{ border: 'none' }}>{typeInfo.label}</Tag>
+            <Tag style={{ border: 'none' }}>{test.title}</Tag>
+          </Space>
+          
+          <Card style={{ background: '#f5f5f5', borderRadius: 12, marginBottom: 24 }}>
+            <Space direction="vertical" size={8}>
+              <div>
+                <Text type="secondary">得分：</Text>
+                <Text strong style={{ fontSize: 24, color: submission.passed ? '#52c41a' : '#ff4d4f' }}>
+                  {submission.score}
+                </Text>
+              </div>
+              {candidateInfo && (
+                <div>
+                  <Text type="secondary">考生：</Text>
+                  <Text>{candidateInfo.name} ({candidateInfo.email})</Text>
+                </div>
+              )}
+            </Space>
+          </Card>
+          
+          {testType === 'algorithm' && submission.run_result?.results && (
+            <Card size="small" style={{ borderRadius: 12, textAlign: 'left' }} title="测试用例结果">
+              <Table
+                dataSource={submission.run_result.results.map((r: any, i: number) => ({ ...r, key: i }))}
+                pagination={false}
+                size="small"
+                columns={[
+                  { title: '#', dataIndex: 'index', width: 50, render: (_: any, __: any, i: number) => i + 1 },
+                  {
+                    title: '状态',
+                    dataIndex: 'ok',
+                    width: 80,
+                    render: (ok: boolean) => ok ? <Tag color="green" style={{ border: 'none' }}>通过</Tag> : <Tag color="red" style={{ border: 'none' }}>失败</Tag>,
+                  },
+                  { title: '输入', dataIndex: 'input', render: (v: any) => <Text code style={{ fontSize: 12 }}>{JSON.stringify(v)}</Text> },
+                  { title: '期望', dataIndex: 'expected', render: (v: any) => <Text code style={{ fontSize: 12 }}>{JSON.stringify(v)}</Text> },
+                  { title: '实际', dataIndex: 'actual', render: (v: any) => <Text code style={{ fontSize: 12 }}>{JSON.stringify(v)}</Text> },
+                ]}
+              />
+            </Card>
+          )}
+          
+          {submission.run_result?.error && (
+            <Card size="small" style={{ borderRadius: 12, textAlign: 'left', marginTop: 16 }} title="运行错误">
+              <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#ff4d4f' }}>{submission.run_result.error}</Paragraph>
+            </Card>
+          )}
+        </Card>
+      </div>
+    );
+  }
+
+  if (!started) {
+    return (
+      <div style={{ maxWidth: 600, margin: '0 auto', padding: '24px 16px' }}>
+        <Card style={{ borderRadius: 16 }}>
+          <div style={{ textAlign: 'center', marginBottom: 32 }}>
+            <Title level={2} style={{ marginBottom: 8 }}>{test.title}</Title>
+            <Space>
+              <Tag color={typeInfo.color} style={{ border: 'none' }}>{typeInfo.label}</Tag>
+              <Tag style={{ border: 'none' }}>{difficultyLabels[test.difficulty] || '中等'}</Tag>
+              {testType === 'algorithm' && (
+                <Tag style={{ border: 'none' }}>{(test.language || 'javascript').toUpperCase()}</Tag>
+              )}
+            </Space>
+          </div>
+
+          {test.description && (
+            <Card size="small" style={{ background: '#F8FAFC', borderRadius: 12, marginBottom: 24 }}>
+              <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{test.description}</Paragraph>
+            </Card>
+          )}
+
+          {test.duration_minutes && (
+            <div style={{ textAlign: 'center', marginBottom: 24 }}>
+              <ClockCircleOutlined style={{ marginRight: 8, color: '#1890ff' }} />
+              <Text>考试时长：<Text strong>{test.duration_minutes}</Text> 分钟</Text>
+            </div>
+          )}
+
+          <Divider>开始答题</Divider>
+
+          <Form form={form} layout="vertical">
+            <Form.Item 
+              name="candidate_name" 
+              rules={[{ required: true, message: '请输入姓名' }]}
+              label="姓名"
+            >
+              <Input prefix={<UserOutlined />} placeholder="请输入您的姓名" size="large" />
+            </Form.Item>
+            <Form.Item 
+              name="candidate_email" 
+              rules={[
+                { required: true, message: '请输入邮箱' },
+                { type: 'email', message: '请输入有效的邮箱地址' }
+              ]}
+              label="邮箱"
+            >
+              <Input prefix={<MailOutlined />} placeholder="请输入您的邮箱" size="large" />
+            </Form.Item>
+            <Form.Item style={{ marginBottom: 0 }}>
+              <Button 
+                type="primary" 
+                size="large" 
+                block 
+                icon={<LoginOutlined />}
+                onClick={handleStart}
+              >
+                开始答题
+              </Button>
+            </Form.Item>
+          </Form>
+        </Card>
+      </div>
+    );
+  }
+
+  const renderQuestionCard = (q: any, index: number) => {
+    const isAnswered = answers[q.id] && answers[q.id].trim() !== '';
+    const isMarked = markedQuestions.has(q.id);
     
-    return questions.map((q: any, index: number) => (
-      <Card key={q.id} size="small" style={{ marginBottom: 16, borderRadius: 12 }} title={`第 ${index + 1} 题`}>
-        <Paragraph style={{ marginBottom: 16 }}>{q.question}</Paragraph>
+    return (
+      <Card
+        key={q.id}
+        id={`question-${q.id}`}
+        ref={(el) => { questionRefs.current[q.id] = el; }}
+        style={{
+          marginBottom: 24,
+          borderRadius: 16,
+          border: isMarked ? '2px solid #faad14' : undefined,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+        }}
+        styles={{
+          header: {
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            borderRadius: '14px 14px 0 0',
+            padding: '12px 20px',
+          },
+        }}
+        title={
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#fff' }}>
+            <Space>
+              <span style={{ fontSize: 16, fontWeight: 600 }}>第 {index + 1} 题</span>
+              {q.is_multiple && <Tag color="gold">多选</Tag>}
+              {isAnswered && <CheckCircleOutlined style={{ color: '#52c41a' }} />}
+            </Space>
+            <Tooltip title={isMarked ? '取消标记' : '标记此题'}>
+              <Button
+                type="text"
+                icon={isMarked ? <FlagFilled style={{ color: '#faad14' }} /> : <FlagOutlined style={{ color: '#fff' }} />}
+                onClick={() => toggleMark(q.id)}
+              />
+            </Tooltip>
+          </div>
+        }
+      >
+        <Paragraph style={{ fontSize: 15, marginBottom: 20, lineHeight: 1.8 }}>{q.question}</Paragraph>
         
         {testType === 'choice' && (
           <>
@@ -226,12 +502,33 @@ const PublicCodingTest: React.FC = () => {
               <Checkbox.Group
                 value={answers[q.id]?.split(',') || []}
                 onChange={(vals) => handleAnswerChange(q.id, (vals as string[]).join(','))}
+                style={{ width: '100%' }}
               >
-                <Space direction="vertical">
+                <Space direction="vertical" style={{ width: '100%' }} size={12}>
                   {q.options?.map((opt: any) => (
-                    <Checkbox key={opt.label} value={opt.label}>
-                      {opt.label}. {opt.text}
-                    </Checkbox>
+                    <div
+                      key={opt.label}
+                      onClick={() => {
+                        const current = answers[q.id]?.split(',').filter(Boolean) || [];
+                        const newVals = current.includes(opt.label)
+                          ? current.filter((v: string) => v !== opt.label)
+                          : [...current, opt.label];
+                        handleAnswerChange(q.id, newVals.join(','));
+                      }}
+                      style={{
+                        padding: '12px 16px',
+                        borderRadius: 8,
+                        border: '1px solid #d9d9d9',
+                        background: (answers[q.id]?.split(',') || []).includes(opt.label) ? '#e6f7ff' : '#fff',
+                        borderColor: (answers[q.id]?.split(',') || []).includes(opt.label) ? '#1890ff' : '#d9d9d9',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                      }}
+                    >
+                      <Checkbox value={opt.label} style={{ pointerEvents: 'none' }}>
+                        <Text strong>{opt.label}.</Text> {opt.text}
+                      </Checkbox>
+                    </div>
                   ))}
                 </Space>
               </Checkbox.Group>
@@ -239,34 +536,123 @@ const PublicCodingTest: React.FC = () => {
               <Radio.Group
                 value={answers[q.id]}
                 onChange={(e) => handleAnswerChange(q.id, e.target.value)}
+                style={{ width: '100%' }}
               >
-                <Space direction="vertical">
+                <Space direction="vertical" style={{ width: '100%' }} size={12}>
                   {q.options?.map((opt: any) => (
-                    <Radio key={opt.label} value={opt.label}>
-                      {opt.label}. {opt.text}
-                    </Radio>
+                    <div
+                      key={opt.label}
+                      onClick={() => handleAnswerChange(q.id, opt.label)}
+                      style={{
+                        padding: '12px 16px',
+                        borderRadius: 8,
+                        border: '1px solid #d9d9d9',
+                        background: answers[q.id] === opt.label ? '#e6f7ff' : '#fff',
+                        borderColor: answers[q.id] === opt.label ? '#1890ff' : '#d9d9d9',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s',
+                      }}
+                    >
+                      <Radio value={opt.label} style={{ pointerEvents: 'none' }}>
+                        <Text strong>{opt.label}.</Text> {opt.text}
+                      </Radio>
+                    </div>
                   ))}
                 </Space>
               </Radio.Group>
             )}
-            {q.is_multiple && <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>（多选题）</Text>}
           </>
         )}
         
         {testType === 'essay' && (
-          <TextArea
-            rows={6}
-            value={answers[q.id] || ''}
-            onChange={(e) => handleAnswerChange(q.id, e.target.value)}
-            placeholder="请输入您的答案..."
-          />
+          <div>
+            <TextArea
+              rows={6}
+              value={answers[q.id] || ''}
+              onChange={(e) => handleAnswerChange(q.id, e.target.value)}
+              placeholder="请输入您的答案..."
+              style={{ borderRadius: 8, marginBottom: 8 }}
+              showCount
+              maxLength={2000}
+            />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              已输入 {(answers[q.id] || '').length} 字
+            </Text>
+          </div>
         )}
+
+        
       </Card>
-    ));
+    );
+  };
+
+  const renderAnswerSheet = () => {
+    const questions = test?.questions || [];
+    
+    return (
+      <Card
+        size="small"
+        style={{ borderRadius: 12, position: 'sticky', top: 16 }}
+        title={
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>答题卡</span>
+            <Space size={4}>
+              <Badge color="#52c41a" text="已答" />
+              <Badge color="#faad14" text="标记" />
+            </Space>
+          </div>
+        }
+      >
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8 }}>
+          {questions.map((q: any, index: number) => {
+            const isAnswered = answers[q.id] && answers[q.id].trim() !== '';
+            const isMarked = markedQuestions.has(q.id);
+            
+            return (
+              <div
+                key={q.id}
+                onClick={() => scrollToQuestion(q.id)}
+                style={{
+                  width: 36,
+                  height: 36,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  fontWeight: 500,
+                  fontSize: 13,
+                  border: isMarked ? '2px solid #faad14' : '1px solid #d9d9d9',
+                  background: isAnswered ? '#52c41a' : '#fff',
+                  color: isAnswered ? '#fff' : '#333',
+                  transition: 'all 0.2s',
+                }}
+              >
+                {index + 1}
+              </div>
+            );
+          })}
+        </div>
+        
+        <div style={{ marginTop: 16, padding: '12px', background: '#f5f5f5', borderRadius: 8 }}>
+          <Progress
+            percent={Math.round((answerStats.answered / answerStats.total) * 100)}
+            size="small"
+            status={answerStats.answered === answerStats.total ? 'success' : 'active'}
+            format={() => `${answerStats.answered}/${answerStats.total}`}
+          />
+          <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>
+            <div>已答: {answerStats.answered} 题</div>
+            <div>未答: {answerStats.total - answerStats.answered} 题</div>
+            {answerStats.marked > 0 && <div style={{ color: '#faad14' }}>标记: {answerStats.marked} 题</div>}
+          </div>
+        </div>
+      </Card>
+    );
   };
 
   return (
-    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px 16px' }}>
+    <div style={{ maxWidth: 1200, margin: '0 auto', padding: '24px 16px' }}>
       <Card style={{ borderRadius: 16 }}>
         <Space direction="vertical" size="large" style={{ width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -274,17 +660,22 @@ const PublicCodingTest: React.FC = () => {
               <Title level={3} style={{ marginBottom: 4 }}>{test.title}</Title>
               <Space>
                 <Tag color={typeInfo.color} style={{ border: 'none' }}>{typeInfo.label}</Tag>
-                <Tag style={{ border: 'none' }}>{test.difficulty || 'intermediate'}</Tag>
+                <Tag style={{ border: 'none' }}>{difficultyLabels[test.difficulty] || '中等'}</Tag>
                 {testType === 'algorithm' && (
                   <Tag style={{ border: 'none' }}>{(test.language || 'javascript').toUpperCase()}</Tag>
                 )}
               </Space>
             </div>
-            {timeLeft !== null && timeLeft > 0 && (
-              <Tag icon={<ClockCircleOutlined />} color={timeLeft < 300 ? 'red' : 'blue'} style={{ fontSize: 16, padding: '4px 12px' }}>
-                剩余时间: {formatTime(timeLeft)}
-              </Tag>
-            )}
+            <Space>
+              {candidateInfo && (
+                <Text type="secondary">{candidateInfo.name} ({candidateInfo.email})</Text>
+              )}
+              {timeLeft !== null && timeLeft > 0 && (
+                <Tag icon={<ClockCircleOutlined />} color={timeLeft < 300 ? 'red' : 'blue'} style={{ fontSize: 16, padding: '4px 12px' }}>
+                  剩余时间: {formatTime(timeLeft)}
+                </Tag>
+              )}
+            </Space>
           </div>
 
           {test.description && (
@@ -292,15 +683,6 @@ const PublicCodingTest: React.FC = () => {
               <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{test.description}</Paragraph>
             </Card>
           )}
-
-          <Form form={form} layout="inline">
-            <Form.Item name="candidate_name" rules={[{ required: true, message: '请输入姓名' }]}>
-              <Input placeholder="姓名" style={{ width: 200 }} />
-            </Form.Item>
-            <Form.Item name="candidate_email" rules={[{ required: true, message: '请输入邮箱' }]}>
-              <Input placeholder="邮箱" style={{ width: 260 }} />
-            </Form.Item>
-          </Form>
 
           {testType === 'algorithm' && (
             <>
@@ -357,24 +739,30 @@ const PublicCodingTest: React.FC = () => {
 
           {(testType === 'choice' || testType === 'essay') && (
             <>
-              {renderQuestions()}
-              
-              <div style={{ textAlign: 'center', marginTop: 24 }}>
-                <Button type="primary" size="large" icon={<SendOutlined />} onClick={onSubmitClick} loading={submitting}>
-                  提交作答
-                </Button>
+              <div style={{ display: 'flex', gap: 24 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {(test?.questions || []).map((q: any, index: number) => renderQuestionCard(q, index))}
+                </div>
+                <div style={{ width: 240, flexShrink: 0, position: 'sticky', top: 16, alignSelf: 'flex-start', maxHeight: 'calc(100vh - 32px)', overflow: 'auto' }}>
+                  {renderAnswerSheet()}
+                </div>
               </div>
               
-              {submission && (
-                <Card size="small" style={{ borderRadius: 12, marginTop: 16, textAlign: 'center' }}>
-                  <Space direction="vertical">
-                    <Tag color={submission.passed ? 'green' : 'red'} style={{ fontSize: 16, padding: '4px 12px' }}>
-                      {submission.passed ? '通过' : '未通过'}
-                    </Tag>
-                    <Text>得分: {submission.score}</Text>
-                  </Space>
-                </Card>
-              )}
+              <div style={{ textAlign: 'center', marginTop: 24, paddingTop: 24, borderTop: '1px solid #f0f0f0' }}>
+                <Space size="large">
+                  <Button size="large" onClick={() => {
+                    const questions = test?.questions || [];
+                    if (questions.length > 0) {
+                      scrollToQuestion(questions[0].id);
+                    }
+                  }}>
+                    回到顶部
+                  </Button>
+                  <Button type="primary" size="large" icon={<SendOutlined />} onClick={onSubmitClick} loading={submitting}>
+                    提交作答
+                  </Button>
+                </Space>
+              </div>
             </>
           )}
         </Space>

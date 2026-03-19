@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Card, Form, Input, Modal, Select, Space, Table, Tag, message, Tooltip, Typography, Popconfirm, InputNumber, Divider } from 'antd';
-import { PlusOutlined, LinkOutlined, SendOutlined, StopOutlined, EyeOutlined, EditOutlined, ImportOutlined, DeleteOutlined } from '@ant-design/icons';
+import { Button, Card, Form, Input, Modal, Select, Space, Table, Tag, message, Tooltip, Typography, Popconfirm, InputNumber, Divider, Tabs, Empty, Descriptions, Collapse, Radio, Checkbox } from 'antd';
+import { PlusOutlined, LinkOutlined, SendOutlined, StopOutlined, EyeOutlined, EditOutlined, ImportOutlined, DeleteOutlined, ArrowLeftOutlined, UserOutlined, ClockCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, CodeOutlined, FileTextOutlined, RobotOutlined, MinusCircleOutlined, SaveOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CodeEditor from '../../components/CodeEditor';
 
 const { TextArea } = Input;
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 const starterCodeByLanguage: Record<string, string> = {
   javascript: `function solution() {
@@ -53,6 +53,9 @@ const CodingTestsList: React.FC = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [questionBanks, setQuestionBanks] = useState<any[]>([]);
   const [testType, setTestType] = useState<string>('algorithm');
+  const [editingQuestions, setEditingQuestions] = useState<any[]>([]);
+  const [questionsModalOpen, setQuestionsModalOpen] = useState(false);
+  const [savingQuestions, setSavingQuestions] = useState(false);
 
   const fetchList = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -197,11 +200,29 @@ const CodingTestsList: React.FC = () => {
 
   const copyLink = async (token: string) => {
     const url = `${window.location.origin}/public/coding-tests/${token}`;
-    try {
-      await navigator.clipboard.writeText(url);
-      message.success('链接已复制');
-    } catch (e) {
-      message.info(url);
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(url);
+        message.success('链接已复制');
+      } catch (e) {
+        message.info(url);
+      }
+    } else {
+      const textArea = document.createElement('textarea');
+      textArea.value = url;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        message.success('链接已复制');
+      } catch (err) {
+        message.info(url);
+      }
+      document.body.removeChild(textArea);
     }
   };
 
@@ -330,7 +351,15 @@ const CodingTestsList: React.FC = () => {
         return <Tag color={info.color} style={{ border: 'none' }}>{info.label}</Tag>;
       },
     },
-    { title: '语言', dataIndex: 'language', key: 'language', render: (v: string) => v || '-' },
+    {
+      title: '语言',
+      dataIndex: 'language',
+      key: 'language',
+      render: (v: string, record: any) => {
+        if (record.test_type !== 'algorithm') return '-';
+        return v ? v.toUpperCase() : '-';
+      },
+    },
     {
       title: '时长',
       dataIndex: 'duration_minutes',
@@ -391,6 +420,11 @@ const CodingTestsList: React.FC = () => {
           <Tooltip title="编辑">
             <Button type="text" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
           </Tooltip>
+          {record.test_type !== 'algorithm' && record.question_generation_status === 'completed' && (
+            <Tooltip title="编辑题目">
+              <Button type="text" icon={<FileTextOutlined style={{ color: '#8B5CF6' }} />} onClick={() => openQuestionsEditor(record)} />
+            </Tooltip>
+          )}
           {record.status !== 'published' && record.status !== 'closed' && (
             <Tooltip title="发布">
               <Button type="text" icon={<SendOutlined style={{ color: '#10B981' }} />} onClick={() => publish(record.id)} />
@@ -468,6 +502,101 @@ const CodingTestsList: React.FC = () => {
     });
   };
 
+  const openQuestionsEditor = async (record: any) => {
+    try {
+      const res = await request.get(`/coding-tests/${record.id}`);
+      setSelectedTest(res);
+      setEditingQuestions(res.questions || []);
+      setQuestionsModalOpen(true);
+    } catch (e) {
+      message.error('获取题目失败');
+    }
+  };
+
+  const handleSaveQuestions = async () => {
+    if (!selectedTest) return;
+    setSavingQuestions(true);
+    try {
+      await request.put(`/coding-tests/${selectedTest.id}`, {
+        questions: editingQuestions,
+      });
+      message.success('题目保存成功');
+      setQuestionsModalOpen(false);
+      fetchList();
+    } catch (e) {
+      message.error('保存失败');
+    } finally {
+      setSavingQuestions(false);
+    }
+  };
+
+  const updateQuestion = (index: number, field: string, value: any) => {
+    const newQuestions = [...editingQuestions];
+    newQuestions[index] = { ...newQuestions[index], [field]: value };
+    setEditingQuestions(newQuestions);
+  };
+
+  const updateOption = (qIndex: number, optIndex: number, field: string, value: string) => {
+    const newQuestions = [...editingQuestions];
+    const options = [...(newQuestions[qIndex].options || [])];
+    options[optIndex] = { ...options[optIndex], [field]: value };
+    newQuestions[qIndex] = { ...newQuestions[qIndex], options };
+    setEditingQuestions(newQuestions);
+  };
+
+  const addOption = (qIndex: number) => {
+    const newQuestions = [...editingQuestions];
+    const options = [...(newQuestions[qIndex].options || [])];
+    const labels = ['A', 'B', 'C', 'D', 'E', 'F'];
+    const nextLabel = labels[options.length] || String(options.length + 1);
+    options.push({ label: nextLabel, text: '' });
+    newQuestions[qIndex] = { ...newQuestions[qIndex], options };
+    setEditingQuestions(newQuestions);
+  };
+
+  const removeOption = (qIndex: number, optIndex: number) => {
+    const newQuestions = [...editingQuestions];
+    const options = [...(newQuestions[qIndex].options || [])];
+    options.splice(optIndex, 1);
+    const labels = ['A', 'B', 'C', 'D', 'E', 'F'];
+    options.forEach((opt, i) => {
+      opt.label = labels[i] || String(i + 1);
+    });
+    newQuestions[qIndex] = { ...newQuestions[qIndex], options };
+    setEditingQuestions(newQuestions);
+  };
+
+  const addQuestion = () => {
+    const newQ = selectedTest?.test_type === 'choice'
+      ? {
+          id: `q_${Date.now()}`,
+          question: '',
+          options: [
+            { label: 'A', text: '' },
+            { label: 'B', text: '' },
+            { label: 'C', text: '' },
+            { label: 'D', text: '' },
+          ],
+          correct_answer: 'A',
+          is_multiple: false,
+          explanation: '',
+          score: 10,
+        }
+      : {
+          id: `q_${Date.now()}`,
+          question: '',
+          reference_answer: '',
+          keywords: [],
+          max_score: 10,
+        };
+    setEditingQuestions([...editingQuestions, newQ]);
+  };
+
+  const removeQuestion = (index: number) => {
+    const newQuestions = editingQuestions.filter((_, i) => i !== index);
+    setEditingQuestions(newQuestions);
+  };
+
   return (
     <div>
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
@@ -499,82 +628,82 @@ const CodingTestsList: React.FC = () => {
       <Modal
         title={selectedTest ? `提交列表：${selectedTest.title}` : '提交列表'}
         open={submissionsOpen}
-        onCancel={() => setSubmissionsOpen(false)}
+        onCancel={() => {
+          setSubmissionsOpen(false);
+          setSelectedSubmission(null);
+        }}
         footer={null}
-        width={980}
+        width={selectedSubmission ? 1100 : 1000}
+        styles={{ body: { maxHeight: '70vh', overflow: 'auto' } }}
       >
-        <Space direction="vertical" style={{ width: '100%' }} size="large">
-          <Table
-            loading={submissionsLoading}
-            dataSource={submissions}
-            rowKey="id"
-            pagination={{ pageSize: 8, showSizeChanger: true }}
-            columns={[
-              { title: '候选人', dataIndex: 'candidate_name', key: 'candidate_name', render: (v: string) => v || '-' },
-              { title: '邮箱', dataIndex: 'candidate_email', key: 'candidate_email', render: (v: string) => v || '-' },
-              {
-                title: '得分',
-                key: 'score',
-                render: (_: any, r: any) => <Text strong>{r.score ?? 0}</Text>,
-              },
-              {
-                title: '通过',
-                key: 'passed',
-                render: (_: any, r: any) => r.passed ? <Tag color="green" style={{ border: 'none' }}>通过</Tag> : <Tag color="red" style={{ border: 'none' }}>未通过</Tag>,
-              },
-              {
-                title: '状态',
-                dataIndex: 'status',
-                key: 'status',
-                render: (s: string) => {
-                  const map: any = {
-                    submitted: { text: '已提交', color: 'blue' },
-                    evaluating: { text: '评价中', color: 'processing' },
-                    evaluated: { text: '已评价', color: 'green' },
-                  };
-                  const info = map[s] || { text: s, color: 'default' };
-                  return <Tag color={info.color} style={{ border: 'none' }}>{info.text}</Tag>;
-                },
-              },
-              {
-                title: '操作',
-                key: 'action',
-                render: (_: any, r: any) => (
-                  <Button onClick={() => openSubmissionDetail(r.id)}>查看详情</Button>
-                ),
-              },
-            ]}
-          />
-
-          {selectedSubmission && (
-            <Card style={{ borderRadius: 12 }}>
-              <Space direction="vertical" style={{ width: '100%' }} size="middle">
-                <Space>
-                  {selectedSubmission.language && <Tag style={{ border: 'none' }}>{selectedSubmission.language}</Tag>}
-                  <Tag color={selectedSubmission.passed ? 'green' : 'red'} style={{ border: 'none' }}>
-                    {selectedSubmission.passed ? '通过' : '未通过'}
-                  </Tag>
-                  <Text type="secondary">得分 {selectedSubmission.score ?? 0}</Text>
+        {selectedSubmission ? (
+          <div>
+            <Button 
+              type="text" 
+              icon={<ArrowLeftOutlined />} 
+              onClick={() => setSelectedSubmission(null)}
+              style={{ marginBottom: 16 }}
+            >
+              返回列表
+            </Button>
+            
+            <Card style={{ borderRadius: 12, marginBottom: 16 }}>
+              <Descriptions column={4} size="small">
+                <Descriptions.Item label={<><UserOutlined /> 候选人</>}>
+                  <Text strong>{selectedSubmission.candidate_name || '-'}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="邮箱">
+                  {selectedSubmission.candidate_email || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label={<><ClockCircleOutlined /> 提交时间</>}>
+                  {selectedSubmission.created_at ? new Date(selectedSubmission.created_at).toLocaleString() : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="结果">
+                  {selectedSubmission.passed ? (
+                    <Tag icon={<CheckCircleOutlined />} color="success">通过</Tag>
+                  ) : (
+                    <Tag icon={<CloseCircleOutlined />} color="error">未通过</Tag>
+                  )}
+                </Descriptions.Item>
+              </Descriptions>
+              <div style={{ marginTop: 12 }}>
+                <Space size="large">
+                  <span>
+                    <Text type="secondary">得分：</Text>
+                    <Text strong style={{ fontSize: 20, color: selectedSubmission.passed ? '#52c41a' : '#ff4d4f' }}>
+                      {selectedSubmission.score ?? 0}
+                    </Text>
+                  </span>
+                  {selectedSubmission.language && (
+                    <span>
+                      <Text type="secondary">语言：</Text>
+                      <Tag style={{ border: 'none' }}>{selectedSubmission.language.toUpperCase()}</Tag>
+                    </span>
+                  )}
                 </Space>
+              </div>
+            </Card>
 
-                {selectedSubmission.code && (
-                  <div>
-                    <Text strong>代码</Text>
-                    <div style={{ marginTop: 8 }}>
-                      <CodeEditor
-                        value={selectedSubmission.code || ''}
-                        language={selectedSubmission.language || 'javascript'}
-                        height={320}
-                        readOnly
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {selectedSubmission.answers && (
-                  <div>
-                    <Text strong>答题详情</Text>
-                    <div style={{ marginTop: 8 }}>
+            <Tabs
+              defaultActiveKey={selectedSubmission.code ? 'code' : 'answers'}
+              items={[
+                selectedSubmission.code ? {
+                  key: 'code',
+                  label: <span><CodeOutlined /> 代码</span>,
+                  children: (
+                    <CodeEditor
+                      value={selectedSubmission.code || ''}
+                      language={selectedSubmission.language || 'javascript'}
+                      height={400}
+                      readOnly
+                    />
+                  ),
+                } : null,
+                selectedSubmission.answers ? {
+                  key: 'answers',
+                  label: <span><FileTextOutlined /> 答题详情</span>,
+                  children: (
+                    <div style={{ maxHeight: 500, overflow: 'auto' }}>
                       {selectedTest?.questions?.map((q: any, i: number) => {
                         const userAnswer = selectedSubmission.answers.find((a: any) => a.question_id === q.id);
                         const isCorrect = userAnswer?.answer === q.correct_answer;
@@ -626,7 +755,7 @@ const CodingTestsList: React.FC = () => {
                                           <Text strong>{opt.label}.</Text>
                                           <Text>{opt.text}</Text>
                                           {isCorrectOption && <Tag color="green" style={{ marginLeft: 8, border: 'none' }}>正确答案</Tag>}
-                                          {isUserChoice && !isCorrect && <Tag color="red" style={{ marginLeft: 8, border: 'none' }}>你的选择</Tag>}
+                                          {isUserChoice && !isCorrect && <Tag color="red" style={{ marginLeft: 8, border: 'none' }}>用户选择</Tag>}
                                         </Space>
                                       </div>
                                     );
@@ -659,25 +788,117 @@ const CodingTestsList: React.FC = () => {
                         );
                       })}
                     </div>
-                  </div>
-                )}
-
-                {(selectedTest?.test_type === 'algorithm' || selectedTest?.test_type === 'essay') && (
-                  <div>
-                    <Text strong>AI 评价</Text>
-                    <div style={{ marginTop: 8 }}>
-                      {selectedSubmission.ai_evaluation ? (
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{selectedSubmission.ai_evaluation}</ReactMarkdown>
-                      ) : (
-                        <Text type="secondary">暂未生成</Text>
-                      )}
+                  ),
+                } : null,
+                (selectedTest?.test_type === 'algorithm' || selectedTest?.test_type === 'essay') ? {
+                  key: 'ai',
+                  label: <span><RobotOutlined /> AI 评价</span>,
+                  children: selectedSubmission.ai_evaluation ? (
+                    <div style={{ maxHeight: 500, overflow: 'auto', padding: '0 8px' }}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{selectedSubmission.ai_evaluation}</ReactMarkdown>
                     </div>
-                  </div>
-                )}
-              </Space>
-            </Card>
-          )}
-        </Space>
+                  ) : (
+                    <Empty description="暂无 AI 评价" style={{ padding: 40 }} />
+                  ),
+                } : null,
+              ].filter(Boolean) as any}
+            />
+          </div>
+        ) : (
+          <Table
+            loading={submissionsLoading}
+            dataSource={submissions}
+            rowKey="id"
+            pagination={{ pageSize: 10, showSizeChanger: true }}
+            size="middle"
+            scroll={{ x: 800 }}
+            columns={[
+              { 
+                title: '候选人', 
+                dataIndex: 'candidate_name', 
+                key: 'candidate_name',
+                width: 120,
+                render: (v: string) => <Text strong>{v || '-'}</Text>,
+              },
+              { 
+                title: '邮箱', 
+                dataIndex: 'candidate_email', 
+                key: 'candidate_email',
+                width: 200,
+                ellipsis: true,
+                render: (v: string) => <Tooltip title={v}>{v || '-'}</Tooltip>,
+              },
+              {
+                title: '得分',
+                key: 'score',
+                width: 80,
+                align: 'center',
+                sorter: (a: any, b: any) => (a.score ?? 0) - (b.score ?? 0),
+                render: (_: any, r: any) => (
+                  <Text strong style={{ fontSize: 15, color: r.passed ? '#52c41a' : '#ff4d4f' }}>
+                    {r.score ?? 0}
+                  </Text>
+                ),
+              },
+              {
+                title: '结果',
+                key: 'passed',
+                width: 100,
+                align: 'center',
+                filters: [
+                  { text: '通过', value: true },
+                  { text: '未通过', value: false },
+                ],
+                onFilter: (value: any, record: any) => record.passed === value,
+                render: (_: any, r: any) => r.passed ? (
+                  <Tag icon={<CheckCircleOutlined />} color="success">通过</Tag>
+                ) : (
+                  <Tag icon={<CloseCircleOutlined />} color="error">未通过</Tag>
+                ),
+              },
+              {
+                title: '状态',
+                dataIndex: 'status',
+                key: 'status',
+                width: 100,
+                filters: [
+                  { text: '已提交', value: 'submitted' },
+                  { text: '评价中', value: 'evaluating' },
+                  { text: '已评价', value: 'evaluated' },
+                ],
+                onFilter: (value: any, record: any) => record.status === value,
+                render: (s: string) => {
+                  const map: any = {
+                    submitted: { text: '已提交', color: 'blue' },
+                    evaluating: { text: '评价中', color: 'processing' },
+                    evaluated: { text: '已评价', color: 'green' },
+                  };
+                  const info = map[s] || { text: s, color: 'default' };
+                  return <Tag color={info.color} style={{ border: 'none' }}>{info.text}</Tag>;
+                },
+              },
+              {
+                title: '提交时间',
+                dataIndex: 'created_at',
+                key: 'created_at',
+                width: 170,
+                sorter: (a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+                render: (v: string) => v ? new Date(v).toLocaleString() : '-',
+              },
+              {
+                title: '操作',
+                key: 'action',
+                width: 100,
+                fixed: 'right' as const,
+                render: (_: any, r: any) => (
+                  <Button type="link" icon={<EyeOutlined />} onClick={() => openSubmissionDetail(r.id)}>
+                    详情
+                  </Button>
+                ),
+              },
+            ]}
+          />
+        )}
       </Modal>
 
       <Modal
@@ -796,6 +1017,140 @@ const CodingTestsList: React.FC = () => {
             </>
           )}
         </Form>
+      </Modal>
+
+      <Modal
+        title={`编辑题目 - ${selectedTest?.title || ''}`}
+        open={questionsModalOpen}
+        onCancel={() => setQuestionsModalOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setQuestionsModalOpen(false)}>取消</Button>,
+          <Button key="add" icon={<PlusOutlined />} onClick={addQuestion}>添加题目</Button>,
+          <Button key="save" type="primary" icon={<SaveOutlined />} loading={savingQuestions} onClick={handleSaveQuestions}>保存</Button>,
+        ]}
+        width={900}
+        styles={{ body: { maxHeight: '70vh', overflow: 'auto' } }}
+      >
+        {editingQuestions.length === 0 ? (
+          <Empty description="暂无题目，请点击添加题目按钮添加" />
+        ) : (
+          <Collapse
+            accordion
+            items={editingQuestions.map((q, qIndex) => ({
+              key: qIndex,
+              label: (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>
+                    <Tag color="blue" style={{ marginRight: 8 }}>第 {qIndex + 1} 题</Tag>
+                    <Text ellipsis style={{ maxWidth: 500 }}>{q.question || '未填写题目'}</Text>
+                  </span>
+                  <Popconfirm title="确定删除此题目？" onConfirm={() => removeQuestion(qIndex)}>
+                    <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
+                  </Popconfirm>
+                </div>
+              ),
+              children: (
+                <div style={{ padding: '0 8px' }}>
+                  <Form.Item label="题目内容" required>
+                    <TextArea
+                      rows={2}
+                      value={q.question}
+                      onChange={(e) => updateQuestion(qIndex, 'question', e.target.value)}
+                      placeholder="请输入题目内容"
+                    />
+                  </Form.Item>
+
+                  {selectedTest?.test_type === 'choice' && (
+                    <>
+                      <Form.Item label="选项">
+                        <div style={{ marginBottom: 8 }}>
+                          {(q.options || []).map((opt: any, optIndex: number) => (
+                            <div key={optIndex} style={{ display: 'flex', alignItems: 'center', marginBottom: 8, gap: 8 }}>
+                              <Tag color="blue" style={{ width: 28, textAlign: 'center' }}>{opt.label}</Tag>
+                              <Input
+                                value={opt.text}
+                                onChange={(e) => updateOption(qIndex, optIndex, 'text', e.target.value)}
+                                placeholder={`选项 ${opt.label} 内容`}
+                                style={{ flex: 1 }}
+                              />
+                              {(q.options || []).length > 2 && (
+                                <Button type="text" danger icon={<MinusCircleOutlined />} onClick={() => removeOption(qIndex, optIndex)} />
+                              )}
+                            </div>
+                          ))}
+                          <Button type="dashed" icon={<PlusOutlined />} onClick={() => addOption(qIndex)} style={{ width: '100%' }}>
+                            添加选项
+                          </Button>
+                        </div>
+                      </Form.Item>
+
+                      <Form.Item label="正确答案">
+                        <Radio.Group
+                          value={q.correct_answer}
+                          onChange={(e) => updateQuestion(qIndex, 'correct_answer', e.target.value)}
+                        >
+                          {(q.options || []).map((opt: any) => (
+                            <Radio key={opt.label} value={opt.label}>{opt.label}</Radio>
+                          ))}
+                        </Radio.Group>
+                      </Form.Item>
+
+                      <Form.Item label="题目解析">
+                        <TextArea
+                          rows={2}
+                          value={q.explanation}
+                          onChange={(e) => updateQuestion(qIndex, 'explanation', e.target.value)}
+                          placeholder="可选，填写答案解析"
+                        />
+                      </Form.Item>
+
+                      <Form.Item label="分值">
+                        <InputNumber
+                          min={1}
+                          max={100}
+                          value={q.score || 10}
+                          onChange={(v) => updateQuestion(qIndex, 'score', v || 10)}
+                        />
+                      </Form.Item>
+                    </>
+                  )}
+
+                  {selectedTest?.test_type === 'essay' && (
+                    <>
+                      <Form.Item label="参考答案">
+                        <TextArea
+                          rows={3}
+                          value={q.reference_answer}
+                          onChange={(e) => updateQuestion(qIndex, 'reference_answer', e.target.value)}
+                          placeholder="请输入参考答案"
+                        />
+                      </Form.Item>
+
+                      <Form.Item label="关键词（用于自动评分）">
+                        <Select
+                          mode="tags"
+                          value={q.keywords || []}
+                          onChange={(v) => updateQuestion(qIndex, 'keywords', v)}
+                          placeholder="输入关键词后按回车添加"
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+
+                      <Form.Item label="满分">
+                        <InputNumber
+                          min={1}
+                          max={100}
+                          value={q.max_score || 10}
+                          onChange={(v) => updateQuestion(qIndex, 'max_score', v || 10)}
+                        />
+                      </Form.Item>
+                    </>
+                  )}
+                </div>
+              ),
+            }))}
+          />
+        )}
       </Modal>
     </div>
   );

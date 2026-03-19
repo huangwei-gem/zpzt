@@ -68,6 +68,15 @@ def check_duplicate_route(
 
 # ==================== 简历上传 ====================
 
+def validate_pdf_file(file: UploadFile):
+    if not file.filename or not file.filename.lower().endswith('.pdf'):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="只允许上传 PDF 格式的文件")
+    if file.content_type and file.content_type != 'application/pdf':
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="只允许上传 PDF 格式的文件")
+    return file
+
 # 注意：单简历上传保持公开，因为应聘者可能通过公开链接投递
 @router.post("", response_model=ResumeResponse)
 def create_resume_route(
@@ -79,6 +88,7 @@ def create_resume_route(
     contact: str = Form(None),
     db: Session = Depends(get_db)
 ):
+    validate_pdf_file(file)
     return upload_resume(db, file, position_id, background_tasks, candidate_name, email, contact)
 
 @router.post("/batch", response_model=List[ResumeResponse])
@@ -89,6 +99,8 @@ def batch_upload_resumes_route(
     db: Session = Depends(get_db),
     current_user: User = Depends(check_roles([UserRole.ADMIN, UserRole.HR]))
 ):
+    for f in files:
+        validate_pdf_file(f)
     return batch_upload_resumes(db, files, position_id, background_tasks)
 
 # ==================== 简历详情与更新 ====================

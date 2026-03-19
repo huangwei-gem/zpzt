@@ -212,9 +212,27 @@ const PositionsList: React.FC = () => {
 
   const handleCopyLink = (id: string) => {
     const url = `${window.location.origin}/public/jobs/${id}`;
-    navigator.clipboard.writeText(url).then(() => {
-      message.success('岗位链接已复制');
-    });
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(url).then(() => {
+        message.success('岗位链接已复制');
+      });
+    } else {
+      const textArea = document.createElement('textarea');
+      textArea.value = url;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        message.success('岗位链接已复制');
+      } catch (err) {
+        message.error('复制失败');
+      }
+      document.body.removeChild(textArea);
+    }
   };
 
   const handleOpenJDModal = async () => {

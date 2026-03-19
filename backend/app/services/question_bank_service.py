@@ -1,8 +1,8 @@
 from sqlalchemy.orm import Session
-from app.models.models import QuestionBank, QuestionCategory, QuestionDifficulty
+from app.models.models import QuestionBank, QuestionCategory, QuestionDifficulty, CodingTest
 from app.schemas.question_bank import QuestionBankCreate, QuestionBankUpdate
 from uuid import UUID
-from fastapi import UploadFile
+from fastapi import UploadFile, HTTPException
 from app.utils.file_storage import save_upload_file
 import json
 
@@ -61,6 +61,13 @@ def delete_question_bank(db: Session, question_bank_id: UUID):
     db_question_bank = db.query(QuestionBank).filter(QuestionBank.id == question_bank_id).first()
     if not db_question_bank:
         return None
+
+    linked_tests = db.query(CodingTest).filter(CodingTest.question_bank_id == question_bank_id).count()
+    if linked_tests > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无法删除：该题库已关联 {linked_tests} 个笔试题，请先解除关联"
+        )
 
     db.delete(db_question_bank)
     db.commit()

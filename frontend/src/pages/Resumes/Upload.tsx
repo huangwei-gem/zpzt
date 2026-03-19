@@ -55,10 +55,16 @@ const ResumeUpload: React.FC = () => {
       setFileList([]);
     },
     beforeUpload: (file) => {
+      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+      if (!isPdf) {
+        message.error('只允许上传 PDF 格式的文件');
+        return Upload.LIST_IGNORE;
+      }
       setFileList([file]);
       return false;
     },
     fileList,
+    accept: '.pdf',
   };
 
   return (
@@ -86,6 +92,7 @@ const ResumeUpload: React.FC = () => {
           name="file"
           label="简历文件"
           rules={[{ required: true, message: '请上传简历' }]}
+          extra="仅支持 PDF 格式"
         >
           <Upload {...uploadProps}>
             <Button icon={<UploadOutlined />}>选择文件</Button>

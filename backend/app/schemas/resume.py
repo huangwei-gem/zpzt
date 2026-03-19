@@ -1,9 +1,10 @@
-from pydantic import BaseModel, EmailStr, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 from typing import Optional, List, Dict, Any
 from uuid import UUID
 from datetime import datetime
 from app.models.models import ResumeStatus, ScreeningResult, RejectReasonCategory, ReviewRecommendation
 from app.schemas.position import PositionResponse
+import re
 
 def _validate_reject_reason_category(v):
     if v is None:
@@ -18,20 +19,28 @@ def _validate_reject_reason_category(v):
             raise ValueError(f"无效的淘汰原因，有效值为: {valid_values}")
     return v
 
+def _normalize_email(v):
+    if v is None:
+        return None
+    if isinstance(v, str):
+        v = v.strip()
+        if not v:
+            return None
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, v):
+            return None
+    return v
+
 class ResumeBase(BaseModel):
     candidate_name: Optional[str] = None
     contact: Optional[str] = None
-    email: Optional[EmailStr] = None
+    email: Optional[str] = None
     position_id: UUID
 
     @field_validator("email", mode="before")
     @classmethod
     def normalize_email(cls, v):
-        if v is None:
-            return None
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
+        return _normalize_email(v)
     
 class ResumeCreate(ResumeBase):
     pass
@@ -42,7 +51,7 @@ class ResumeUpdate(BaseModel):
     status: Optional[ResumeStatus] = None
     candidate_name: Optional[str] = None
     contact: Optional[str] = None
-    email: Optional[EmailStr] = None
+    email: Optional[str] = None
     stage: Optional[str] = None
     # 淘汰相关字段
     reject_reason_category: Optional[RejectReasonCategory] = None
@@ -51,11 +60,7 @@ class ResumeUpdate(BaseModel):
     @field_validator("email", mode="before")
     @classmethod
     def normalize_email(cls, v):
-        if v is None:
-            return None
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
+        return _normalize_email(v)
 
 class ResumeResponse(ResumeBase):
     id: UUID
@@ -142,18 +147,14 @@ class HRDecisionResponse(BaseModel):
 
 # 简历查重检查
 class DuplicateCheckRequest(BaseModel):
-    email: Optional[EmailStr] = None
+    email: Optional[str] = None
     contact: Optional[str] = None
     position_id: UUID
 
     @field_validator("email", mode="before")
     @classmethod
     def normalize_email(cls, v):
-        if v is None:
-            return None
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
+        return _normalize_email(v)
 
 
 class DuplicateCheckResponse(BaseModel):
