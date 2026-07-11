@@ -1,9 +1,10 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, Suspense, lazy } from 'react';
 import { Table, Button, Space, message, Tag, Modal, Tooltip, Typography, Form, Select, Upload, Input, DatePicker, InputNumber, Card, Row, Col, Checkbox } from 'antd';
 import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, DownloadOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, SolutionOutlined, SyncOutlined, FileTextOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useNavigate } from 'react-router-dom';
-import PdfViewer from '../../components/PdfViewer';
+
+const PdfViewer = lazy(() => import('../../components/PdfViewer'));
 
 const { Title, Text } = Typography;
 
@@ -103,8 +104,11 @@ const ResumesList: React.FC = () => {
   }, [pollingEnabled]);
 
   const fetchPositions = async () => {
+    const cached = sessionStorage.getItem('_cached_positions');
+    if (cached) { try { setPositions(JSON.parse(cached)); return; } catch {} }
     try {
       const res = await request.get('/positions');
+      sessionStorage.setItem('_cached_positions', JSON.stringify(res));
       setPositions(res);
     } catch (error) {
       console.error('获取岗位列表失败');
@@ -112,8 +116,11 @@ const ResumesList: React.FC = () => {
   };
 
   const fetchQuestionBanks = async () => {
+    const cached = sessionStorage.getItem('_cached_question_banks');
+    if (cached) { try { setQuestionBanks(JSON.parse(cached)); return; } catch {} }
     try {
       const res = await request.get('/question-banks');
+      sessionStorage.setItem('_cached_question_banks', JSON.stringify(res));
       setQuestionBanks(res);
     } catch (error) {
       console.error('获取题库列表失败');
@@ -123,8 +130,11 @@ const ResumesList: React.FC = () => {
   const [interviewers, setInterviewers] = useState([]);
 
   const fetchInterviewers = async () => {
+    const cached = sessionStorage.getItem('_cached_interviewers');
+    if (cached) { try { setInterviewers(JSON.parse(cached)); return; } catch {} }
     try {
       const res = await request.get('/auth/interviewers');
+      sessionStorage.setItem('_cached_interviewers', JSON.stringify(res));
       setInterviewers(res);
     } catch (error) {
       console.error('获取面试官列表失败');
@@ -1143,7 +1153,13 @@ const ResumesList: React.FC = () => {
         styles={{ body: { height: '85vh', padding: 0 } }}
       >
         {previewPdfUrl ? (
-          <PdfViewer pdfUrl={previewPdfUrl} />
+          <Suspense fallback={
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '80vh' }}>
+              <span style={{ color: '#999' }}>加载 PDF 引擎...</span>
+            </div>
+          }>
+            <PdfViewer pdfUrl={previewPdfUrl} />
+          </Suspense>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
             加载中...
