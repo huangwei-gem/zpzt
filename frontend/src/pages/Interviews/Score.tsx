@@ -547,6 +547,12 @@ const InterviewScore: React.FC = () => {
           transcript: fullTranscript || null
         });
         setInterview(res);
+        // Trigger AI comprehensive analysis
+        try {
+          const analyzed = await request.post(`/interviews/${id}/ai-analysis`) as any;
+          if (analyzed && !analyzed.detail) setInterview(analyzed);
+        } catch (e) { console.error('AI analysis failed:', e); }
+
         
         if (isMultiInterviewer) {
           const updatedInterview = await request.get(`/interviews/${id}`) as any;
@@ -643,6 +649,12 @@ const InterviewScore: React.FC = () => {
         }) as any;
         
         setInterview(res);
+        // Trigger AI comprehensive analysis
+        try {
+          const analyzed = await request.post(`/interviews/${id}/ai-analysis`) as any;
+          if (analyzed && !analyzed.detail) setInterview(analyzed);
+        } catch (e) { console.error('AI analysis failed:', e); }
+
         message.success('评分已提交，AI正在分析...');
       }
       

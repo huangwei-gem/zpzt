@@ -1,0 +1,22 @@
+﻿INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm00100000-0000-0000-0000-00000000001', '大客户经理', '大客户经理', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm00200000-0000-0000-0000-00000000002', '医疗渠道经理', '医疗渠道经理', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm00300000-0000-0000-0000-00000000003', '商务专员', '商务专员', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm00400000-0000-0000-0000-00000000004', '渠道拓展专员', '市场BD专员', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm00500000-0000-0000-0000-00000000005', '市场BD主管', '市场BD主管', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm00600000-0000-0000-0000-00000000006', '销售运营实习生', '销售运营实习生', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm00700000-0000-0000-0000-00000000007', '运营专员', '运营专员', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm00800000-0000-0000-0000-00000000008', '运营专员（财税法方向）', '运营专员', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm00900000-0000-0000-0000-00000000009', '蓝领招聘专员', '招商专员', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm01000000-0000-0000-0000-00000000010', '招商专员', '招商专员/招商专员（CJF）', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm01100000-0000-0000-0000-00000000011', '招商专员（地招）', '招商专员（地招）', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm01200000-0000-0000-0000-00000000012', '招商专员（CJF）', '招商专员（CJF）', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm01300000-0000-0000-0000-00000000013', '招生专员（劳动者方向）', '招商专员（地招）', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm01400000-0000-0000-0000-00000000014', '劳动者运营实习生（家政业务方向）', '劳动者运营实习生', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm01500000-0000-0000-0000-00000000015', '商家运营专员（月休8天）', '商家运营专员', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm01600000-0000-0000-0000-00000000016', '商家运营专员', '商家运营专员', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm01700000-0000-0000-0000-00000000017', '产品运营经理（双休）', '产品运营经理', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm01800000-0000-0000-0000-00000000018', '产品运营经理', '产品运营经理', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm01900000-0000-0000-0000-00000000019', '招生专员', '招商专员', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm02000000-0000-0000-0000-00000000020', '人力资源助理_实习生', '人力资源助理', '2026-07-09T00:00:00Z');
+INSERT INTO position_mappings (id, raw_name, mapped_name, created_at) VALUES ('pm02100000-0000-0000-0000-00000000021', '人力资源助理', '人力资源助理', '2026-07-09T00:00:00Z');
+

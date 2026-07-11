@@ -5,14 +5,20 @@ import {
   UserOutlined,
   FileTextOutlined,
   TeamOutlined,
-  BankOutlined,
-  CodeOutlined,
   LogoutOutlined,
   BellOutlined,
   SettingOutlined,
-  SolutionOutlined,
-  FileAddOutlined,
-  ApartmentOutlined
+  ApartmentOutlined,
+  FileProtectOutlined,
+  UsergroupAddOutlined,
+  SafetyOutlined,
+  HomeOutlined,
+  CheckCircleOutlined,
+  FilterOutlined,
+  BarChartOutlined,
+  RadarChartOutlined,
+  FolderOpenOutlined,
+  PartitionOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
@@ -40,15 +46,21 @@ const AppLayout: React.FC = () => {
       label: '仪表盘',
     },
     {
+      key: '/requisitions',
+      icon: <FileProtectOutlined />,
+      label: '需求管理',
+      roles: ['admin', 'hr'],
+    },
+    {
       key: '/positions',
       icon: <UserOutlined />,
       label: '岗位管理',
       roles: ['admin', 'hr'],
     },
     {
-      key: '/question-banks',
-      icon: <BankOutlined />,
-      label: '题库管理',
+      key: '/interviewer-mapping',
+      icon: <PartitionOutlined />,
+      label: '面试官映射表',
       roles: ['admin', 'hr'],
     },
     {
@@ -57,32 +69,62 @@ const AppLayout: React.FC = () => {
       label: '简历管理',
     },
     {
+      key: '/talent-pool',
+      icon: <UsergroupAddOutlined />,
+      label: '人才库',
+      roles: ['admin', 'hr'],
+    },
+    {
       key: '/interviews',
       icon: <TeamOutlined />,
       label: '面试管理',
     },
     {
-      key: '/coding-tests',
-      icon: <CodeOutlined />,
-      label: '笔试管理',
+      key: '/background-checks',
+      icon: <SafetyOutlined />,
+      label: '背调管理',
       roles: ['admin', 'hr'],
     },
     {
-      key: '/offers',
-      icon: <FileAddOutlined />,
-      label: 'Offer管理',
+      key: '/onboarding',
+      icon: <HomeOutlined />,
+      label: '入职管理',
       roles: ['admin', 'hr'],
     },
     {
-      key: '/offers/templates',
-      icon: <FileTextOutlined />,
-      label: 'Offer模板',
+      key: '/probation',
+      icon: <CheckCircleOutlined />,
+      label: '试用期管理',
+      roles: ['admin', 'hr'],
+    },
+    {
+      key: '/resume-screening',
+      icon: <FilterOutlined />,
+      label: '简历初筛',
+      roles: ['admin', 'hr'],
+    },
+    {
+      key: '/daily-reports',
+      icon: <BarChartOutlined />,
+      label: '招聘日报',
       roles: ['admin', 'hr'],
     },
     {
       key: '/workflows',
       icon: <ApartmentOutlined />,
       label: '工作流',
+    },
+    {
+      key: '/settings/position-mappings',
+      icon: <FolderOpenOutlined />,
+      label: '岗位映射',
+      roles: ['admin'],
+    },
+    {
+      key: '/settings/capability-dimensions',
+      icon: <RadarChartOutlined />,
+      label: '能力维度',
+      roles: ['admin'],
     },
     {
       key: '/settings/users',
@@ -170,7 +212,7 @@ const AppLayout: React.FC = () => {
           selectedKeys={[location.pathname]}
           items={filteredMenuItems}
           onClick={({ key }) => navigate(key)}
-          style={{ padding: '16px 8px', borderRight: 0 }}
+          style={{ padding: '16px 8px', borderRight: 0, overflowY: 'auto', maxHeight: 'calc(100vh - 64px)' }}
         />
       </Sider>
       <Layout style={{ marginLeft: 240 }}>

@@ -70,6 +70,9 @@ const PositionsList: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [users, setUsers] = useState<any[]>([]);
   const [jdModalVisible, setJdModalVisible] = useState(false);
+  const [aiMatchingId, setAiMatchingId] = useState<string | null>(null);
+  const [aiMatchResult, setAiMatchResult] = useState<any>(null);
+  const [aiMatchVisible, setAiMatchVisible] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
   const [searchTitle, setSearchTitle] = useState<string>('');
@@ -105,6 +108,19 @@ const PositionsList: React.FC = () => {
     fetchPositions();
     fetchUsers();
   }, [searchTitle, searchStatus]);
+
+  const handleAIMatch = async (record: Position) => {
+    setAiMatchingId(record.id);
+    try {
+      const res = await request.post(`/positions/${record.id}/ai-match`) as any;
+      setAiMatchResult({ position: record, rankings: res.rankings || [] });
+      setAiMatchVisible(true);
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || 'AI候选人匹配失败');
+    } finally {
+      setAiMatchingId(null);
+    }
+  };
 
   const handleAdd = () => {
     setEditingId(null);
@@ -366,6 +382,9 @@ const PositionsList: React.FC = () => {
         <Space size="small">
           <Tooltip title="查看详情">
             <Button type="text" icon={<EyeOutlined style={{ color: '#3B82F6' }} />} onClick={() => handleView(record)} />
+          <Tooltip title="AI候选人匹配">
+            <Button type="text" icon={<ThunderboltOutlined style={{ color: '#8B5CF6' }} />} loading={aiMatchingId === record.id} onClick={() => handleAIMatch(record)} />
+          </Tooltip>
           </Tooltip>
           {record.status === 'published' ? (
              <Tooltip title="下架岗位">
@@ -578,6 +597,17 @@ const PositionsList: React.FC = () => {
         </Form>
       </Modal>
 
+      <Modal title="AI候选人匹配排名" open={aiMatchVisible} onCancel={() => setAiMatchVisible(false)} footer={<Button onClick={() => setAiMatchVisible(false)}>关闭</Button>} width={640}>
+        {aiMatchResult?.rankings?.map((item: any, idx: number) => (
+          <div key={idx} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span><Tag color={idx === 0 ? 'green' : 'blue'}>第{idx+1}名</Tag> {item.candidate_name}</span>
+              <Tag color="geekblue">{item.match_score}分</Tag>
+            </div>
+            <div style={{ color: '#64748B', fontSize: 13, marginTop: 4 }}>{item.ranking_reason}</div>
+          </div>
+        ))}
+      </Modal>
       <JDGeneratorModal
         visible={jdModalVisible}
         onCancel={() => setJdModalVisible(false)}

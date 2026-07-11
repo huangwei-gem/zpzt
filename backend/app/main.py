@@ -6,10 +6,11 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.routes import auth, positions, question_banks, resumes, interviews, dashboard, coding_tests, settings, offers, offer_templates, public_review, workflows
+from app.routes import auth, positions, question_banks, resumes, interviews, dashboard, coding_tests, settings, offers, offer_templates, public_review, workflows, requisitions, channels, talent_pool, background_checks, onboarding, probation
 from app.routes.offers import router as offers_router, public_router as offers_public_router
 from app.config.database import engine, SessionLocal
 from app.models.models import Base, User, UserRole
+from app.models.hr_models import *  # ensure new tables registered
 from app.core.security import get_password_hash
 from app.services.workflow_service import create_builtin_workflows
 
@@ -92,6 +93,12 @@ app.include_router(offers_public_router, prefix="/api")
 app.include_router(offer_templates.router, prefix="/api")
 app.include_router(public_review.router, prefix="/api")
 app.include_router(workflows.router, prefix="/api")
+app.include_router(requisitions.router, prefix="/api")
+app.include_router(channels.router, prefix="/api")
+app.include_router(talent_pool.router, prefix="/api")
+app.include_router(background_checks.router, prefix="/api")
+app.include_router(onboarding.router, prefix="/api")
+app.include_router(probation.router, prefix="/api")
 
 
 def init_builtin_workflows_on_startup():

@@ -4,7 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import request from '../../utils/request';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { DownloadOutlined, FilePdfOutlined, FileWordOutlined, ArrowLeftOutlined, CloseCircleOutlined, EditOutlined, SaveOutlined, ReloadOutlined, UserOutlined, CheckCircleOutlined, TeamOutlined, SolutionOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { DownloadOutlined, FilePdfOutlined, ArrowLeftOutlined, CloseCircleOutlined, EditOutlined, SaveOutlined, ReloadOutlined, UserOutlined, CheckCircleOutlined, TeamOutlined, SolutionOutlined, ClockCircleOutlined, RobotOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import RejectReasonSelector, { REJECT_REASONS } from '../../components/RejectReasonSelector';
 import { useAuth } from '../../contexts/AuthContext';
 import { getMaximizedPdfPreviewUrl } from '../../utils/pdfPreview';
@@ -57,6 +57,7 @@ const ResumeDetail: React.FC = () => {
   const [isSubmitReviewModalVisible, setIsSubmitReviewModalVisible] = useState(false);
   const [myReview, setMyReview] = useState<any>(null);
   const [submitReviewForm] = Form.useForm();
+  const [aiScreening, setAiScreening] = useState(false);
 
   useEffect(() => {
     if (id) {
@@ -149,10 +150,25 @@ const ResumeDetail: React.FC = () => {
   }
 
   const parsedData = resume.parsed_data || {};
-  const fileUrl = resume.file_path ? (resume.file_path.startsWith('/') ? resume.file_path : `/${resume.file_path}`) : '';
-  const isPdf = fileUrl.toLowerCase().endsWith('.pdf');
-  const pdfPreviewUrl = isPdf ? getMaximizedPdfPreviewUrl(fileUrl) : '';
+  const token = localStorage.getItem('token') || '';
+  const fileApiUrl = id ? `/api/resumes/${id}/file?token=${encodeURIComponent(token)}` : '';
+  const downloadUrl = id ? `/api/resumes/${id}/file?download=true&token=${encodeURIComponent(token)}` : '';
+  const pdfPreviewUrl = fileApiUrl ? getMaximizedPdfPreviewUrl(fileApiUrl) : '';
   const statusInfo = getStatusInfo(resume.status, resume.parse_status);
+
+  // AI初筛
+  const handleAIScreen = async () => {
+    setAiScreening(true);
+    try {
+      const res = await request.post(`/resumes/${id}/ai-screen`);
+      message.success('AI初筛完成');
+      fetchResume(id!);
+    } catch (error) {
+      message.error('AI初筛失败，请检查AI服务配置');
+    } finally {
+      setAiScreening(false);
+    }
+  };
 
   const handleReparse = () => {
     Modal.confirm({
@@ -356,6 +372,7 @@ const ResumeDetail: React.FC = () => {
     // 基础操作
     if (!isEditing) {
       buttons.push(
+        <Button key="ai-screen" type="primary" loading={aiScreening} icon={<ThunderboltOutlined />} onClick={handleAIScreen} style={{background: 'linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%)', border: 'none'}}>AI初筛</Button>,
         <Button key="reparse" icon={<ReloadOutlined />} onClick={handleReparse} disabled={resume?.parse_status === 'processing'}>重新解析</Button>,
         <Button key="edit" icon={<EditOutlined />} onClick={() => setIsEditing(true)}>编辑</Button>
       );
@@ -493,25 +510,17 @@ const ResumeDetail: React.FC = () => {
       <div style={{ flex: 1, background: '#fff', borderRadius: '16px', border: '1px solid #E2E8F0', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '16px 24px', borderBottom: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#F8FAFC' }}>
           <Title level={5} style={{ margin: 0 }}>简历原件预览</Title>
-          <Button type="primary" icon={<DownloadOutlined />} href={fileUrl} target="_blank" download>
+          <Button type="primary" icon={<DownloadOutlined />} href={downloadUrl} target="_blank">
             下载原件
           </Button>
         </div>
         <div style={{ flex: 1, background: '#F1F5F9' }}>
-          {fileUrl ? (
-            isPdf ? (
-              <iframe
-                src={pdfPreviewUrl}
-                style={{ width: '100%', height: '100%', border: 'none', display: 'block', background: '#fff' }}
-                title="Resume Preview"
-              />
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#64748B' }}>
-                <FileWordOutlined style={{ fontSize: '64px', marginBottom: '16px', color: '#3B82F6' }} />
-                <Text type="secondary" style={{ marginBottom: '16px' }}>该文件格式暂不支持在线预览，请下载后查看</Text>
-                <Button type="primary" href={fileUrl} download>下载文件</Button>
-              </div>
-            )
+          {id ? (
+            <iframe
+              src={pdfPreviewUrl}
+              style={{ width: '100%', height: '100%', border: 'none', display: 'block', background: '#fff' }}
+              title="Resume Preview"
+            />
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#94A3B8' }}>
               暂无文件
@@ -607,28 +616,90 @@ const ResumeDetail: React.FC = () => {
             )}
           </Descriptions>
 
-          <Divider style={{ borderColor: '#E2E8F0' }}>AI 初审评价</Divider>
-          <div style={{
-            background: '#F8FAFC',
-            padding: '20px',
-            borderRadius: '12px',
-            border: '1px solid #E2E8F0',
-            color: '#334155',
-            fontSize: '15px',
-            lineHeight: 1.8
-          }}>
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                h3: ({node, ...props}) => <h3 style={{ color: '#0F172A', marginTop: '16px', marginBottom: '8px', fontSize: '16px' }} {...props} />,
-                p: ({node, ...props}) => <p style={{ marginBottom: '12px' }} {...props} />,
-                ul: ({node, ...props}) => <ul style={{ paddingLeft: '20px', marginBottom: '12px' }} {...props} />,
-                li: ({node, ...props}) => <li style={{ marginBottom: '4px' }} {...props} />
-              }}
-            >
-              {resume.ai_review || '暂无评价'}
-            </ReactMarkdown>
-          </div>
+          <Divider style={{ borderColor: '#E2E8F0' }}><Space><RobotOutlined style={{ color: '#6366F1' }} /> AI 智能初筛评价</Space></Divider>
+          {resume.ai_review ? (
+            typeof resume.ai_review === 'object' ? (
+              <div style={{ background: '#F8FAFC', padding: '20px', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
+                {resume.ai_review.summary && (
+                  <div style={{ marginBottom: 16, padding: '12px 16px', background: '#EEF2FF', borderRadius: '8px', borderLeft: '4px solid #6366F1' }}>
+                    <Text strong style={{ color: '#4338CA' }}>总体评价：</Text>
+                    <Text>{resume.ai_review.summary}</Text>
+                  </div>
+                )}
+                {resume.ai_review.recommendation && (
+                  <div style={{ marginBottom: 16 }}>
+                    <Tag color={resume.ai_review.recommendation.includes('strongly_recommend') ? 'green' : resume.ai_review.recommendation.includes('recommend') && !resume.ai_review.recommendation.includes('not') ? 'blue' : resume.ai_review.recommendation.includes('neutral') ? 'gold' : 'red'} style={{ fontSize: 14, padding: '4px 12px' }}>
+                      {resume.ai_review.recommendation === 'strongly_recommend' ? '强烈推荐' : resume.ai_review.recommendation === 'recommend' ? '推荐' : resume.ai_review.recommendation === 'neutral' ? '中立' : resume.ai_review.recommendation === 'not_recommend' ? '不推荐' : resume.ai_review.recommendation === 'strongly_not_recommend' ? '强烈不推荐' : resume.ai_review.recommendation}
+                    </Tag>
+                  </div>
+                )}
+                {resume.ai_review.strengths && resume.ai_review.strengths.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <Text strong style={{ color: '#10B981', display: 'block', marginBottom: 8 }}>✓ 核心优势</Text>
+                    <div>
+                      {resume.ai_review.strengths.map((s: string, i: number) => (
+                        <Tag key={i} color="green" style={{ marginBottom: 4, padding: '2px 8px' }}>{s}</Tag>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {resume.ai_review.risks && resume.ai_review.risks.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <Text strong style={{ color: '#EF4444', display: 'block', marginBottom: 8 }}>⚠ 潜在风险</Text>
+                    <div>
+                      {resume.ai_review.risks.map((r: string, i: number) => (
+                        <Tag key={i} color="red" style={{ marginBottom: 4, padding: '2px 8px' }}>{r}</Tag>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {resume.ai_review.skill_match && (resume.ai_review.skill_match.matched?.length > 0 || resume.ai_review.skill_match.gaps?.length > 0) && (
+                  <Row gutter={16} style={{ marginBottom: 16 }}>
+                    <Col span={12}>
+                      <Text strong style={{ color: '#3B82F6', display: 'block', marginBottom: 8 }}>匹配技能</Text>
+                      {(resume.ai_review.skill_match.matched || []).map((s: string, i: number) => (
+                        <Tag key={i} color="blue" style={{ marginBottom: 4, padding: '2px 8px' }}>{s}</Tag>
+                      ))}
+                    </Col>
+                    <Col span={12}>
+                      <Text strong style={{ color: '#F59E0B', display: 'block', marginBottom: 8 }}>技能差距</Text>
+                      {(resume.ai_review.skill_match.gaps || []).map((s: string, i: number) => (
+                        <Tag key={i} color="orange" style={{ marginBottom: 4, padding: '2px 8px' }}>{s}</Tag>
+                      ))}
+                    </Col>
+                  </Row>
+                )}
+                {resume.ai_review.suggested_questions && resume.ai_review.suggested_questions.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <Text strong style={{ display: 'block', marginBottom: 8, color: '#7C3AED' }}>❓ 建议面试问题</Text>
+                    {resume.ai_review.suggested_questions.map((q: string, i: number) => (
+                      <div key={i} style={{ padding: '8px 12px', marginBottom: 4, background: '#FDF4FF', borderRadius: '6px', borderLeft: '3px solid #7C3AED', fontSize: 14 }}>
+                        {i + 1}. {q}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {resume.ai_review.experience_analysis && (
+                  <div style={{ padding: '12px 16px', background: '#F0FDF4', borderRadius: '8px', borderLeft: '4px solid #10B981' }}>
+                    <Text strong style={{ color: '#15803D' }}>经验分析：</Text>
+                    <Text>{resume.ai_review.experience_analysis}</Text>
+                  </div>
+                )}
+                {resume.ai_review.raw_response && (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{resume.ai_review.raw_response}</ReactMarkdown>
+                )}
+              </div>
+            ) : (
+              <div style={{ background: '#F8FAFC', padding: '20px', borderRadius: '12px', border: '1px solid #E2E8F0', color: '#334155', fontSize: '15px', lineHeight: 1.8 }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{resume.ai_review}</ReactMarkdown>
+              </div>
+            )
+          ) : (
+            <div style={{ background: '#F8FAFC', padding: '32px 20px', borderRadius: '12px', border: '1px dashed #CBD5E1', textAlign: 'center', color: '#94A3B8' }}>
+              <RobotOutlined style={{ fontSize: 40, marginBottom: 12, color: '#CBD5E1' }} />
+              <div style={{ fontSize: 14 }}>暂无AI评价，点击“AI初筛”按钮生成</div>
+            </div>
+          )}
 
           {/* 其他岗位匹配推荐 */}
           {resume.other_position_matches && resume.other_position_matches.length > 0 && (

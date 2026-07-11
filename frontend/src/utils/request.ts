@@ -3,7 +3,7 @@ import { message } from 'antd';
 
 const request: any = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
-  timeout: 10000,
+  timeout: 30000,
 });
 
 request.interceptors.request.use(

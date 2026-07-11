@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Table, Button, Space, message, Tag, Modal, Tooltip, Typography, Form, Select, Upload, Input, DatePicker, InputNumber, Card, Row, Col, Checkbox } from 'antd';
-import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, UndoOutlined, SolutionOutlined, SyncOutlined } from '@ant-design/icons';
+import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, DownloadOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, SolutionOutlined, SyncOutlined, FileTextOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useNavigate } from 'react-router-dom';
+import PdfViewer from '../../components/PdfViewer';
 
 const { Title, Text } = Typography;
 
@@ -39,6 +40,12 @@ const ResumesList: React.FC = () => {
 
   const [searchName, setSearchName] = useState('');
   const [searchStatus, setSearchStatus] = useState<string | undefined>(undefined);
+  const [previewVisible, setPreviewVisible] = useState(false);
+  const [previewRecord, setPreviewRecord] = useState<any>(null);
+  const [previewPdfUrl, setPreviewPdfUrl] = useState<string>('');
+  // 前端缓存，切页面回来不重新拉飞书
+  const dataCache = useRef<any[]>([]);
+  const loadedRef = useRef(false);
 
   const fetchResumes = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -52,8 +59,17 @@ const ResumesList: React.FC = () => {
         params.reviewer_id = user.id;
       }
 
+      // 没有筛选条件且有缓存时直接复用
+      if (!searchName && !searchStatus && loadedRef.current && dataCache.current.length > 0) {
+        setData(dataCache.current);
+        if (!silent) setLoading(false);
+        return;
+      }
+
       const res = await request.get('/resumes', { params });
       setData(res);
+      dataCache.current = res;
+      loadedRef.current = true;
 
       // 检查是否有正在解析中的简历
       const hasProcessing = res.some((r: any) => r.parse_status === 'processing');
@@ -129,6 +145,8 @@ const ResumesList: React.FC = () => {
   const handleReset = () => {
     setSearchName('');
     setSearchStatus(undefined);
+    dataCache.current = [];
+    loadedRef.current = false;
     setLoading(true);
     request.get('/resumes')
       .then(res => {
@@ -283,23 +301,21 @@ const ResumesList: React.FC = () => {
     setInterviewModalVisible(true);
   };
 
-  const handleReject = (id: string) => {
-    Modal.confirm({
-      title: '确认淘汰',
-      content: '确定要淘汰这份简历吗？',
-      okText: '确认',
-      cancelText: '取消',
-      okType: 'danger',
-      onOk: async () => {
-        try {
-          await request.put(`/resumes/${id}`, { status: 'rejected' });
-          message.success('已标记为淘汰');
-          fetchResumes();
-        } catch (error) {
-          message.error('操作失败');
-        }
-      },
-    });
+  const handleReject = async (record: any) => {
+    // 乐观更新：立即更新本地状态
+    setData(prev => prev.map(item =>
+      item.id === record.id ? { ...item, status: 'rejected' } : item
+    ));
+    try {
+      await request.post(`/resumes/${record.id}/reject-from-screening`);
+      message.success(`${record.candidate_name} 已淘汰`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || '操作失败');
+      // 回滚
+      setData(prev => prev.map(item =>
+        item.id === record.id ? { ...item, status: record.status } : item
+      ));
+    }
   };
 
   const handleDelete = (id: string) => {
@@ -313,9 +329,37 @@ const ResumesList: React.FC = () => {
         try {
           await request.delete(`/resumes/${id}`);
           message.success('删除成功');
+          // 清缓存强制刷新
+          dataCache.current = [];
+          loadedRef.current = false;
           fetchResumes();
         } catch (error) {
           message.error('删除失败');
+        }
+      },
+    });
+  };
+
+  const handleClearRejected = () => {
+    Modal.confirm({
+      title: '一键清除已淘汰',
+      content: '确定要删除所有 HR复核结果为"未通过"的候选人记录吗？此操作不可恢复。',
+      okText: '确认清除',
+      cancelText: '取消',
+      okType: 'danger',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        const hide = message.loading('正在清除已淘汰记录...', 0);
+        try {
+          const res = await request.post('/resumes/clear-rejected');
+          hide();
+          message.success(`已清除 ${res.deleted} 条已淘汰记录`);
+          dataCache.current = [];
+          loadedRef.current = false;
+          fetchResumes();
+        } catch (error: any) {
+          hide();
+          message.error(error?.response?.data?.detail || '清除失败');
         }
       },
     });
@@ -337,6 +381,8 @@ const ResumesList: React.FC = () => {
           await Promise.all(selectedRowKeys.map(id => request.delete(`/resumes/${id}`)));
           message.success(`成功删除 ${selectedRowKeys.length} 份简历`);
           setSelectedRowKeys([]);
+          dataCache.current = [];
+          loadedRef.current = false;
           fetchResumes();
         } catch (error) {
           message.error('批量删除失败');
@@ -380,33 +426,35 @@ const ResumesList: React.FC = () => {
       okText: '确认',
       cancelText: '取消',
       onOk: async () => {
+        const hide = message.loading('正在重新解析...', 0);
         try {
-          await request.post(`/resumes/${record.id}/reparse`);
-          message.success('已开始重新解析');
+          const res = await request.post(`/resumes/${record.id}/reparse`);
+          hide();
+          message.success('重新解析完成');
           fetchResumes();
-        } catch (error) {
-          message.error('重新解析失败');
+        } catch (error: any) {
+          hide();
+          message.error(error?.response?.data?.detail || '重新解析失败');
         }
       },
     });
   };
 
-  const handleRestore = (id: string) => {
-    Modal.confirm({
-      title: '确认恢复',
-      content: '确定要恢复这份简历吗？恢复后状态将变为“待评审”。',
-      okText: '确认',
-      cancelText: '取消',
-      onOk: async () => {
-        try {
-          await request.put(`/resumes/${id}`, { status: 'pending_review' });
-          message.success('已恢复简历状态');
-          fetchResumes();
-        } catch (error) {
-          message.error('操作失败');
-        }
-      },
-    });
+  const handleApproveToTalentPool = async (record: any) => {
+    // 乐观更新：立即更新本地状态
+    setData(prev => prev.map(item =>
+      item.id === record.id ? { ...item, status: 'approved' } : item
+    ));
+    try {
+      await request.post(`/resumes/${record.id}/approve-to-talent-pool`);
+      message.success(`${record.candidate_name} 已入库`);
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || '入库失败');
+      // 回滚
+      setData(prev => prev.map(item =>
+        item.id === record.id ? { ...item, status: record.status } : item
+      ));
+    }
   };
 
   const handleUploadClick = () => {
@@ -482,6 +530,25 @@ const ResumesList: React.FC = () => {
     accept: '.pdf'
   };
 
+  const handlePreview = (record: any) => {
+    setPreviewRecord(record);
+    const token = localStorage.getItem('token') || '';
+    setPreviewPdfUrl(`/api/resumes/${record.id}/file?token=${encodeURIComponent(token)}`);
+    setPreviewVisible(true);
+  };
+
+  const handleDownload = (record: any) => {
+    const token = localStorage.getItem('token') || '';
+    const url = `/api/resumes/${record.id}/file?download=true&token=${encodeURIComponent(token)}`;
+    // 创建临时 a 标签触发下载
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (record.candidate_name || 'resume') + '.pdf';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
   const columns = [
     { 
       title: '候选人', 
@@ -489,34 +556,88 @@ const ResumesList: React.FC = () => {
       key: 'candidate_name',
       render: (text: string) => <span style={{ fontWeight: 500, color: '#0F172A' }}>{text || '解析中...'}</span>
     },
-    { title: '联系方式', dataIndex: 'contact', key: 'contact' },
-    { title: '应聘岗位', dataIndex: ['position', 'title'], key: 'position' },
     { 
-      title: '匹配度', 
-      dataIndex: 'match_score', 
-      key: 'match_score', 
-      sorter: (a: any, b: any) => a.match_score - b.match_score,
-      render: (score: number) => (
-        <span style={{ 
-          color: score >= 80 ? '#10B981' : score >= 60 ? '#F59E0B' : '#EF4444',
-          fontWeight: 600 
-        }}>
-          {score > 0 ? `${score}分` : '-'}
-        </span>
-      )
+      title: '应聘岗位', 
+      dataIndex: 'position_applied', 
+      key: 'position_applied',
+      render: (_: any, record: any) => {
+        const pd = record.parsed_data || {};
+        const mapped = record.position_mapped || record.mapped_position || pd.position || '';
+        const original = record.position_applied || record.position?.title || pd.position || '';
+        return mapped ? (
+          <Tooltip title={`原始: ${original || '-'}`}>
+            <Tag color="blue">{mapped}</Tag>
+          </Tooltip>
+        ) : (
+          <span>{original || '-'}</span>
+        );
+      }
+    },
+    { 
+      title: '优势分析', 
+      dataIndex: 'advantage',
+      key: 'advantage',
+      width: 160,
+      render: (_: any, record: any) => {
+        const adv = record.advantage || '';
+        if (!adv) return <span style={{ color: '#999' }}>-</span>;
+        return (
+          <Tooltip title={<div style={{ maxWidth: 360, whiteSpace: 'pre-wrap' }}>{adv}</div>} overlayStyle={{ maxWidth: 400 }}>
+            <Tag color="success" style={{ cursor: 'pointer' }}>{adv.length > 25 ? adv.slice(0, 25) + '...' : adv}</Tag>
+          </Tooltip>
+        );
+      }
+    },
+    { 
+      title: '劣势/风险', 
+      dataIndex: 'risk',
+      key: 'risk',
+      width: 180,
+      render: (_: any, record: any) => {
+        const risk = record.risk || '';
+        if (!risk) return <span style={{ color: '#999' }}>-</span>;
+        return (
+          <Tooltip title={<div style={{ maxWidth: 360, whiteSpace: 'pre-wrap' }}>{risk}</div>} overlayStyle={{ maxWidth: 400 }}>
+            <Tag color="error" style={{ cursor: 'pointer' }}>{risk.length > 25 ? risk.slice(0, 25) + '...' : risk}</Tag>
+          </Tooltip>
+        );
+      }
+    },
+    { 
+      title: 'AI初筛结果', 
+      dataIndex: 'screening_result',
+      key: 'screening_result',
+      width: 120,
+      render: (_: any, record: any) => {
+        const result = record.screening_result || '';
+        const labelMap: Record<string, string> = {
+          '强烈推荐': '强烈推荐',
+          '推荐': '推荐',
+          '待定': '待定',
+          '不推荐': '不推荐',
+          '强烈不推荐': '强烈不推荐',
+          '通过': '通过',
+          '未通过': '未通过',
+        };
+        const colorMap: Record<string, string> = {
+          '强烈推荐': 'success',
+          '推荐': 'cyan',
+          '待定': 'warning',
+          '不推荐': 'error',
+          '强烈不推荐': 'error',
+          '通过': 'success',
+          '未通过': 'error',
+        };
+        if (!result) return <span style={{ color: '#999' }}>-</span>;
+        const color = colorMap[result] || 'default';
+        return <Tag color={color}>{result}</Tag>;
+      }
     },
     { 
       title: '状态', 
       dataIndex: 'status', 
       key: 'status',
       render: (status: string, record: any) => {
-        if (record?.parse_status === 'failed') {
-          const tag = <Tag color="error">解析失败</Tag>;
-          return record?.parse_error ? <Tooltip title={record.parse_error}>{tag}</Tooltip> : tag;
-        }
-        if (record?.parse_status === 'processing') {
-          return <Tag color="processing">解析中</Tag>;
-        }
         let color = 'default';
         let text = status;
         switch(status) {
@@ -526,6 +647,7 @@ const ResumesList: React.FC = () => {
           case 'pending_hr_decision': color = 'purple'; text = '待HR决策'; break;
           case 'auto_rejected_pending_review': color = 'orange'; text = 'AI建议淘汰'; break;
           case 'pending_interview': color = 'geekblue'; text = '待面试'; break;
+          case 'approved': color = 'success'; text = '已入库'; break;
           case 'interview_passed': color = 'lime'; text = '面试通过'; break;
           case 'interview_failed': color = 'magenta'; text = '面试未通过'; break;
           case 'offer_pending': color = 'blue'; text = 'Offer待确认'; break;
@@ -543,6 +665,8 @@ const ResumesList: React.FC = () => {
     {
       title: '操作',
       key: 'action',
+      fixed: 'right' as const,
+      width: 260,
       render: (_, record: any) => {
         // 面试官只能查看和评审
         if (user?.role === 'interviewer') {
@@ -563,8 +687,11 @@ const ResumesList: React.FC = () => {
 
         return (
           <Space size="small">
-            <Tooltip title="查看详情">
-              <Button type="text" icon={<EyeOutlined style={{ color: '#3B82F6' }} />} onClick={() => navigate(`/resumes/${record.id}`)} />
+            <Tooltip title="预览简历">
+              <Button type="text" icon={<FileTextOutlined style={{ color: '#6366F1' }} />} onClick={() => handlePreview(record)} />
+            </Tooltip>
+            <Tooltip title="下载简历">
+              <Button type="text" icon={<DownloadOutlined style={{ color: '#22C55E' }} />} onClick={() => handleDownload(record)} />
             </Tooltip>
             {/* Only Admin and HR can schedule interviews - only after initial review passed */}
             {(user?.role === 'admin' || user?.role === 'hr') && canScheduleInterview && (
@@ -578,26 +705,18 @@ const ResumesList: React.FC = () => {
                 <Button type="text" icon={<SolutionOutlined style={{ color: '#8B5CF6' }} />} onClick={() => navigate(`/resumes/${record.id}`)} />
               </Tooltip>
             )}
-            {record.status === 'rejected' && (
-              <Tooltip title="恢复">
-                 <Button type="text" icon={<UndoOutlined />} onClick={() => handleRestore(record.id)} />
-              </Tooltip>
+            {/* 只显示入库按钮 */}
+            {(user?.role === 'admin' || user?.role === 'hr') && record.status === 'pending_screening' && (
+              <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => handleApproveToTalentPool(record)}>
+                入库
+              </Button>
             )}
-            {(user?.role === 'admin' || user?.role === 'hr') && (
-              <Tooltip title="重新解析">
-                <Button
-                  type="text"
-                  icon={<ReloadOutlined />}
-                  onClick={() => handleReparse(record)}
-                  disabled={record?.parse_status === 'processing'}
-                />
-              </Tooltip>
+            {(user?.role === 'admin' || user?.role === 'hr') && record.status === 'pending_screening' && (
+              <Button size="small" icon={<CloseOutlined />} onClick={() => handleReject(record)}>
+                不入库
+              </Button>
             )}
-            {record.status !== 'rejected' && record.status !== 'completed' && (
-              <Tooltip title="淘汰">
-                 <Button type="text" danger icon={<CloseCircleOutlined />} onClick={() => handleReject(record.id)} />
-              </Tooltip>
-            )}
+
             <Tooltip title="删除">
               <Button type="text" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)} />
             </Tooltip>
@@ -623,6 +742,9 @@ const ResumesList: React.FC = () => {
             <>
               <Button icon={pollingEnabled ? <SyncOutlined spin /> : <ReloadOutlined />} onClick={() => fetchResumes()}>
                 {pollingEnabled ? '解析中...' : '刷新'}
+              </Button>
+              <Button danger icon={<CloseCircleOutlined />} onClick={handleClearRejected}>
+                清除已淘汰
               </Button>
               <Button type="primary" icon={<PlusOutlined />} onClick={handleUploadClick} size="large" style={{ borderRadius: '8px' }}>上传简历</Button>
             </>
@@ -703,7 +825,9 @@ const ResumesList: React.FC = () => {
         dataSource={data} 
         loading={loading} 
         rowKey="id" 
-        pagination={{ pageSize: 10, showSizeChanger: true }}
+        size="small"
+        scroll={{ x: 'max-content' }}
+        pagination={{ pageSize: 15, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
         rowSelection={{
           selectedRowKeys,
           onChange: setSelectedRowKeys,
@@ -1002,6 +1126,29 @@ const ResumesList: React.FC = () => {
             <Checkbox>发送邮件通知候选人</Checkbox>
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 简历预览 Modal - 展示原始 PDF */}
+      <Modal
+        title={`简历 - ${previewRecord?.candidate_name || ''}`}
+        open={previewVisible}
+        onCancel={() => { setPreviewPdfUrl(''); setPreviewVisible(false); }}
+        footer={[
+          <Button key="detail" type="default" onClick={() => { setPreviewPdfUrl(''); setPreviewVisible(false); navigate(`/resumes/${previewRecord?.id}`); }}>
+            查看详情
+          </Button>,
+          <Button key="close" type="primary" onClick={() => { setPreviewPdfUrl(''); setPreviewVisible(false); }}>关闭</Button>
+        ]}
+        width={1000}
+        styles={{ body: { height: '85vh', padding: 0 } }}
+      >
+        {previewPdfUrl ? (
+          <PdfViewer pdfUrl={previewPdfUrl} />
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+            加载中...
+          </div>
+        )}
       </Modal>
     </div>
   );

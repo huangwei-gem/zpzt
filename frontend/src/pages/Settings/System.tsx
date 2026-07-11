@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Button, Card, Form, Input, Space, Typography, message, Result, Switch, InputNumber, Divider, Tabs, Alert, Tag, Tooltip } from 'antd';
+import { Button, Card, Form, Input, Space, Typography, message, Result, Switch, InputNumber, Divider, Tabs, Alert, Tag, Tooltip, Popconfirm, Statistic, Table } from 'antd';
+import { PlusOutlined, DeleteOutlined, EditOutlined, SaveOutlined, CloseOutlined, BellOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -75,6 +76,111 @@ const SystemSettingsPage: React.FC = () => {
   const [promptForm] = Form.useForm();
   const [promptVariables, setPromptVariables] = useState<PromptVariablesResponse | null>(null);
   const userPromptRef = useRef<any>(null);
+  const [initLoading, setInitLoading] = useState(false);
+  const [initStats, setInitStats] = useState<Record<string, number> | null>(null);
+
+  // 面试官映射表
+  type InterviewerMapping = { id?: string; name: string; open_id: string };
+  const [interviewerMappings, setInterviewerMappings] = useState<InterviewerMapping[]>([]);
+  const [interviewerLoading, setInterviewerLoading] = useState(false);
+  const [interviewerSaving, setInterviewerSaving] = useState(false);
+  const [notifyingAll, setNotifyingAll] = useState(false);
+
+  const fetchInterviewerMappings = async () => {
+    setInterviewerLoading(true);
+    try {
+      const res = (await request.get('/settings/interviewers')) as InterviewerMapping[];
+      setInterviewerMappings(res || []);
+    } catch {
+      setInterviewerMappings([]);
+    } finally {
+      setInterviewerLoading(false);
+    }
+  };
+
+  const saveInterviewerMappings = async () => {
+    // 过滤掉空行
+    const items = interviewerMappings.filter(m => m.name.trim() && m.open_id.trim());
+    setInterviewerSaving(true);
+    try {
+      await request.put('/settings/interviewers', { items });
+      message.success('面试官映射已保存');
+      fetchInterviewerMappings();
+    } catch (e: any) {
+      message.error('保存失败: ' + (e?.message || ''));
+    } finally {
+      setInterviewerSaving(false);
+    }
+  };
+
+  const handleAddMapping = () => {
+    setInterviewerMappings(prev => [...prev, { name: '', open_id: '' }]);
+  };
+
+  const handleDeleteMapping = (index: number) => {
+    setInterviewerMappings(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleMappingChange = (index: number, field: 'name' | 'open_id', value: string) => {
+    setInterviewerMappings(prev => prev.map((m, i) => i === index ? { ...m, [field]: value } : m));
+  };
+
+  const columns = [
+    {
+      title: '姓名',
+      dataIndex: 'name',
+      key: 'name',
+      render: (_: string, record: InterviewerMapping, index: number) => (
+        <Input
+          value={record.name}
+          placeholder="面试官姓名"
+          onChange={e => handleMappingChange(index, 'name', e.target.value)}
+          style={{ width: '100%' }}
+        />
+      ),
+    },
+    {
+      title: '飞书 Open ID',
+      dataIndex: 'open_id',
+      key: 'open_id',
+      render: (_: string, record: InterviewerMapping, index: number) => (
+        <Input
+          value={record.open_id}
+          placeholder="ou_xxxxxxxxxxxx"
+          onChange={e => handleMappingChange(index, 'open_id', e.target.value)}
+          style={{ width: '100%' }}
+        />
+      ),
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 80,
+      render: (_: any, __: InterviewerMapping, index: number) => (
+        <Button
+          type="text"
+          danger
+          icon={<DeleteOutlined />}
+          onClick={() => handleDeleteMapping(index)}
+        />
+      ),
+    },
+  ];
+
+  const handleNotifyAll = async () => {
+    setNotifyingAll(true);
+    try {
+      const res: any = await request.post('/settings/interviewers/notify-all', {
+        title: '📢 面试官通知',
+        content: '请及时登录系统查看当前面试安排。',
+      });
+      message.success(`已通知 ${res?.total || 0} 位面试官`);
+    } catch (e: any) {
+      message.error('通知失败: ' + (e?.message || ''));
+    } finally {
+      setNotifyingAll(false);
+    }
+  };
 
   const fetchSettings = async () => {
     setLoading(true);
@@ -194,6 +300,7 @@ const SystemSettingsPage: React.FC = () => {
     fetchMailSettings();
     fetchPromptConfigs();
     fetchPromptVariables();
+    fetchInterviewerMappings();
   }, [role, form, mailForm]);
 
   // 当切换 Tab 时更新表单值
@@ -326,6 +433,31 @@ const SystemSettingsPage: React.FC = () => {
     }
   };
 
+  const fetchInitStatus = async () => {
+    try {
+      const data = await request.get('/init/status');
+      setInitStats(data as any);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleInitReset = async () => {
+    setInitLoading(true);
+    try {
+      const data = await request.post('/init/reset');
+      message.success('数据已重置，已清除 ' + Object.keys(data.deleted).length + ' 张业务表');
+      await fetchInitStatus();
+    } catch (e) {
+      message.error('重置失败');
+    } finally {
+      setInitLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchInitStatus();
+  }, []);
   if (role !== 'admin') {
     return (
       <Result
@@ -470,6 +602,44 @@ const SystemSettingsPage: React.FC = () => {
       <Divider />
 
       <Card
+        title="面试官 open_id 映射"
+        loading={interviewerLoading}
+        extra={
+          <Space>
+            <Button icon={<BellOutlined />} onClick={handleNotifyAll} loading={notifyingAll}>
+              通知全部面试官
+            </Button>
+            <Button onClick={fetchInterviewerMappings}>刷新</Button>
+            <Button type="primary" icon={<SaveOutlined />} onClick={saveInterviewerMappings} loading={interviewerSaving}>
+              保存
+            </Button>
+          </Space>
+        }
+      >
+        <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+          配置面试官姓名与飞书 open_id 的对应关系，用于发送面试通知。open_id 可在飞书开发者后台 → 成员管理 中查看。
+        </Text>
+        <Table
+          dataSource={interviewerMappings}
+          columns={columns}
+          rowKey={(_, index) => String(index)}
+          pagination={false}
+          size="small"
+          locale={{ emptyText: '暂无映射，点击下方按钮添加' }}
+        />
+        <Button
+          type="dashed"
+          icon={<PlusOutlined />}
+          onClick={handleAddMapping}
+          style={{ marginTop: 12, width: '100%' }}
+        >
+          添加映射
+        </Button>
+      </Card>
+
+      <Divider />
+
+      <Card
         title="邮件服务配置"
         loading={mailLoading}
         extra={
@@ -576,6 +746,44 @@ const SystemSettingsPage: React.FC = () => {
             <Input placeholder="例如：http://localhost:5173 或 https://hr.example.com" autoComplete="off" />
           </Form.Item>
         </Form>
+      </Card>
+
+      <Divider />
+
+      <Card
+        title="面试官 open_id 映射"
+        loading={interviewerLoading}
+        extra={
+          <Space>
+            <Button icon={<BellOutlined />} onClick={handleNotifyAll} loading={notifyingAll}>
+              通知全部面试官
+            </Button>
+            <Button onClick={fetchInterviewerMappings}>刷新</Button>
+            <Button type="primary" icon={<SaveOutlined />} onClick={saveInterviewerMappings} loading={interviewerSaving}>
+              保存
+            </Button>
+          </Space>
+        }
+      >
+        <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+          配置面试官姓名与飞书 open_id 的对应关系，用于发送面试通知。open_id 可在飞书开发者后台 → 成员管理 中查看。
+        </Text>
+        <Table
+          dataSource={interviewerMappings}
+          columns={columns}
+          rowKey={(_, index) => String(index)}
+          pagination={false}
+          size="small"
+          locale={{ emptyText: '暂无映射，点击下方按钮添加' }}
+        />
+        <Button
+          type="dashed"
+          icon={<PlusOutlined />}
+          onClick={handleAddMapping}
+          style={{ marginTop: 12, width: '100%' }}
+        >
+          添加映射
+        </Button>
       </Card>
 
       <Divider />

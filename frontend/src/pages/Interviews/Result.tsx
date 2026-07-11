@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Card, Descriptions, Button, Result, Typography, Divider, Tag, List, Space, message, Dropdown, Spin } from 'antd';
 import type { MenuProps } from 'antd';
 import { useParams, useNavigate } from 'react-router-dom';
-import { DownloadOutlined, FileMarkdownOutlined, FilePdfOutlined, DownOutlined } from '@ant-design/icons';
+import { DownloadOutlined, FileMarkdownOutlined, FilePdfOutlined, DownOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -17,6 +17,7 @@ const InterviewResultPage: React.FC = () => {
   const [interview, setInterview] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [isEditingResult, setIsEditingResult] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
 
   useEffect(() => {
     if (id) {
@@ -49,6 +50,20 @@ const InterviewResultPage: React.FC = () => {
     }, 3000);
     return () => clearInterval(interval);
   }, [id, isGeneratingEvaluation]);
+
+  const handleAIAnalysis = async () => {
+    if (!id) return;
+    setAnalyzing(true);
+    try {
+      const res = await request.post(`/interviews/${id}/ai-analysis`) as any;
+      setInterview(res);
+      message.success('AI综合分析已生成');
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || 'AI分析失败');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
 
   const handleConfirmResult = async (result: string) => {
       try {
@@ -269,6 +284,9 @@ const InterviewResultPage: React.FC = () => {
                     <Button key="buy" onClick={() => navigate(`/resumes/${interview.resume_id}`)}>
                     查看简历
                     </Button>
+                    {!isEditingResult && (
+                        <Button key="ai-analysis" type="primary" loading={analyzing} icon={<ThunderboltOutlined />} onClick={handleAIAnalysis} style={{ marginLeft: 8, background: 'linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%)', border: 'none' }}>AI综合分析</Button>
+                    )}
                     {!isEditingResult && (
                         <Button type="dashed" onClick={() => setIsEditingResult(true)} style={{ marginLeft: 8 }}>
                         修改结果

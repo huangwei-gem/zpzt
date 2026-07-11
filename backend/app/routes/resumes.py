@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks, Query, Request
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from app.config.database import get_db
 from app.schemas.resume import (
@@ -15,10 +16,12 @@ from app.services.resume_service import (
     confirm_rejection, override_rejection, get_resume_with_reviews, transfer_resume_position
 )
 from app.models.models import ResumeStatus, RejectReasonCategory, User, UserRole, Resume
-from app.core.security import check_roles
+from app.core.security import check_roles, get_current_user_dep, SECRET_KEY, ALGORITHM
 from app.routes.auth import get_current_user
 from typing import List, Dict, Any, Optional
 from uuid import UUID
+import os
+from jose import jwt, JWTError
 
 router = APIRouter(
     prefix="/resumes",
@@ -150,6 +153,65 @@ def reparse_resume_route(
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
     return resume
+
+@router.get("/{resume_id}/file")
+def get_resume_file(
+    resume_id: UUID,
+    request: Request,
+    token: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """返回简历原始 PDF 文件，用于前端 iframe 内联预览。
+    
+    认证优先级：
+    1. ?token= 查询参数（iframe src 场景）
+    2. Authorization: Bearer <token> header（常规 fetch 场景）
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+    )
+
+    # 确定 token：优先 query param，其次 header
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+
+    if not token:
+        raise credentials_exception
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if not email:
+            raise credentials_exception
+        user = db.query(User).filter(User.email == email).first()
+        if not user or not user.is_active:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    resume = db.query(Resume).filter(Resume.id == resume_id).first()
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    if not resume.file_path or not os.path.exists(resume.file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # download=true → 强制下载；否则浏览器内联预览
+    download = request.query_params.get("download", "").lower() == "true"
+    filename = (resume.candidate_name or "resume") + ".pdf"
+    # URL-encode 中文文件名
+    from urllib.parse import quote
+    disposition = f'attachment; filename*=UTF-8\'\'{quote(filename)}' if download else 'inline'
+
+    return FileResponse(
+        path=resume.file_path,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": disposition
+        }
+    )
 
 # ==================== 部门评审 ====================
 
