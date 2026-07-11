@@ -542,7 +542,7 @@ const Dashboard: React.FC = () => {
             style={{ height: '100%', borderRadius: 16 }}
             styles={{ body: { padding: 20 } }}
           >
-            {funnel && funnel.stages.length > 0 ? (
+            {funnel?.stages?.length > 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 {funnel.stages.map((stage, index) => (
                   <div key={stage.stage} style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -614,7 +614,7 @@ const Dashboard: React.FC = () => {
         styles={{ body: { padding: 20 } }}
       >
         <div className="dash-chart-enter" style={{ height: 320, width: '100%', minHeight: 320 }}>
-          {timeline.length > 0 ? (
+          {timeline?.length > 0 ? (
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={timeline} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
               <defs>

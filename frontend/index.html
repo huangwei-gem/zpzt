@@ -9,27 +9,6 @@
       content="AI Interview 是面向招聘团队的智能招聘管理系统，覆盖岗位、简历、面试、笔试、Offer 和招聘工作流。"
     />
     <title>AI Interview 智能招聘管理系统</title>
-    <!-- 提前加载 PDF.js（点击预览时秒开） -->
-    <link rel="preload" href="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js" as="script" crossorigin />
-    <link rel="preload" href="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js" as="script" crossorigin />
-    <script>
-      // 在页面空闲时预加载 pdf.js，避免预览时等待
-      window.__pdfjsReady = false;
-      if ('requestIdleCallback' in window) {
-        requestIdleCallback(function () {
-          var s = document.createElement('script');
-          s.src = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js';
-          s.onload = function () {
-            window.__pdfjsReady = true;
-            // 设置 worker 路径
-            if (window.pdfjsLib) {
-              window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
-            }
-          };
-          document.head.appendChild(s);
-        }, { timeout: 2000 });
-      }
-    </script>
   </head>
   <body>
     <div id="root"></div>
