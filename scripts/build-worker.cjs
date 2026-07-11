@@ -6,19 +6,35 @@
  */
 const { execSync } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const WORKER_SRC = path.resolve(PROJECT_ROOT, 'worker', 'src', 'index.ts');
 const OUT_FILE = path.resolve(PROJECT_ROOT, 'frontend', 'dist', '_worker.js');
-const ESBUILD = path.resolve(PROJECT_ROOT, 'worker', 'node_modules', '.bin', 'esbuild');
+
+// 尝试多个可能的 esbuild 路径
+const esbuildPaths = [
+  path.resolve(PROJECT_ROOT, 'worker', 'node_modules', '.bin', 'esbuild'),
+  path.resolve(PROJECT_ROOT, 'node_modules', '.bin', 'esbuild'),
+  path.resolve(PROJECT_ROOT, 'frontend', 'node_modules', '.bin', 'esbuild'),
+];
+
+let esbuildCmd = 'npx esbuild'; // fallback
+for (const p of esbuildPaths) {
+  if (fs.existsSync(p) || fs.existsSync(p + '.cmd') || fs.existsSync(p + '.ps1')) {
+    esbuildCmd = `"${p}"`;
+    break;
+  }
+}
 
 console.log('[build-worker] 开始编译 _worker.js...');
 console.log(`  源文件: ${WORKER_SRC}`);
 console.log(`  输出:   ${OUT_FILE}`);
+console.log(`  esbuild: ${esbuildCmd}`);
 
 try {
   execSync(
-    `"${ESBUILD}" "${WORKER_SRC}" --bundle --outfile="${OUT_FILE}" --format=esm --platform=browser --external:__STATIC_CONTENT_MANIFEST --target=es2021 --minify`,
+    `${esbuildCmd} "${WORKER_SRC}" --bundle --outfile="${OUT_FILE}" --format=esm --platform=browser --external:__STATIC_CONTENT_MANIFEST --target=es2021 --minify`,
     {
       cwd: PROJECT_ROOT,
       stdio: 'inherit',

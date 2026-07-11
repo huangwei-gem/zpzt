@@ -48,5 +48,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install worker dependencies (for build-worker.cjs)
+        run: npm ci
+        working-directory: worker
+
       - name: Build
         run: npm run build
