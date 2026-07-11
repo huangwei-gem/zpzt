@@ -411,7 +411,17 @@ app.get('/api/auth/interviewers', authMiddleware, async (c) => {
   return c.json(result.results.map(serializeUser));
 });
 
-
+// GET /api/question-banks — 题库列表
+app.get('/api/question-banks', authMiddleware, async (c) => {
+  const result = await c.env.DB.prepare("SELECT id, name, category, questions FROM question_banks ORDER BY created_at DESC").all();
+  const banks = (result.results || []).map((row: any) => ({
+    id: row.id,
+    name: row.name,
+    category: row.category || 'technical',
+    question_count: row.questions ? (() => { try { return JSON.parse(row.questions).length; } catch { return 0; } })() : 0,
+  }));
+  return c.json(banks);
+});
 
 // ==================== Dashboard Routes ====================
 

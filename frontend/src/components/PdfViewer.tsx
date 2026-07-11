@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Spin } from 'antd';
+import * as pdfjsLib from 'pdfjs-dist';
+
+// 设置 worker 路径（从 node_modules 加载）
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.js',
+  import.meta.url
+).href;
 
 interface PdfViewerProps {
   pdfUrl: string;
@@ -17,17 +24,10 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
 
     async function init() {
       try {
-        // 动态加载 PDF.js
-        const pdfjsLib: any = await new Promise((resolve, reject) => {
-          const script = document.createElement('script');
-          script.src = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js';
-          script.onload = () => resolve((window as any).pdfjsLib);
-          script.onerror = () => reject(new Error('无法加载 PDF.js 库'));
-          document.head.appendChild(script);
-        });
-
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
         if (cancelled) return;
+
+        setLoading(true);
+        setError('');
 
         const resp = await fetch(pdfUrl);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -80,31 +80,42 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
           canvasNodes.push(canvas);
 
           const ctx = canvas.getContext('2d');
-          await page.render({ canvasContext: ctx!, viewport: scaledVp }).promise;
+          if (!ctx) return;
+
+          await page.render({ canvasContext: ctx, viewport: scaledVp }).promise;
           page.cleanup();
 
           completed++;
-          setProgress(`已渲染 ${completed} / ${total} 页`);
+          if (!cancelled) {
+            setProgress(`共 ${total} 页，已渲染 ${completed}/${total}`);
+          }
         }
 
-        // 逐个渲染，避免同时过多请求
-        for (const pn of pageNums) {
-          await renderOne(pn);
+        // 并发渲染所有页面（控制并发数 3）
+        const concurrency = 3;
+        for (let i = 0; i < pageNums.length; i += concurrency) {
+          const batch = pageNums.slice(i, i + concurrency);
+          await Promise.all(batch.map(renderOne));
         }
 
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setProgress('');
+        }
       } catch (e: any) {
         if (!cancelled) {
-          setError(e.message || '加载 PDF 失败');
+          console.error('PdfViewer 渲染失败:', e);
+          setError(e.message || 'PDF 渲染失败');
           setLoading(false);
         }
       }
     }
 
     init();
+
     return () => {
       cancelled = true;
-      canvasNodes.forEach(c => {
+      canvasNodes.forEach((c) => {
         const ctx = c.getContext('2d');
         if (ctx) ctx.clearRect(0, 0, c.width, c.height);
       });
@@ -113,42 +124,51 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
 
   if (error) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', flexDirection: 'column', gap: 12 }}>
-        <div style={{ color: '#ff4d4f', fontSize: 16 }}>❌ 加载失败</div>
-        <div style={{ color: '#666' }}>{error}</div>
+      <div style={{ textAlign: 'center', padding: 40, color: '#ff4d4f' }}>
+        <p>❌ {error}</p>
       </div>
     );
   }
 
   return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', background: '#525659' }}>
-      {/* 加载进度条 */}
+    <div
+      style={{
+        background: '#525659',
+        minHeight: 300,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        position: 'relative',
+      }}
+    >
       {loading && (
-        <div style={{
-          padding: '12px 16px',
-          background: '#1a1a2e',
-          color: '#ccc',
-          fontSize: 13,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          flexShrink: 0,
-        }}>
-          <Spin size="small" />
-          <span>{progress || '正在加载 PDF...'}</span>
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10,
+            background: 'rgba(82,86,89,0.9)',
+          }}
+        >
+          <Spin size="large" />
+          {progress && (
+            <p style={{ color: '#ccc', marginTop: 12, fontSize: 13 }}>{progress}</p>
+          )}
         </div>
       )}
-
-      {/* 可滚动预览区 */}
       <div
         ref={canvasContainerRef}
         style={{
-          flex: 1,
-          overflow: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          padding: '4px 0',
+          width: '100%',
+          maxWidth: 900,
+          padding: '8px 0',
         }}
       />
     </div>

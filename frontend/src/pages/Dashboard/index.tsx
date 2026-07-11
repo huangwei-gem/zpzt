@@ -1,15 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, Row, Col, List, Avatar, Typography, Spin, message, Table, Tag, Progress, Statistic, Tabs, Select, Empty, Button, Space } from 'antd';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar, Legend, LineChart, Line, PieChart, Pie, Cell, FunnelChart, Funnel, LabelList
+  BarChart, Bar, Legend, LineChart, Line,
 } from 'recharts';
 import { 
   UserOutlined, FileTextOutlined, TeamOutlined,
   ArrowUpOutlined, ClockCircleOutlined, ArrowDownOutlined,
   CheckCircleOutlined, CloseCircleOutlined, SyncOutlined,
-  TrophyOutlined, RiseOutlined, FallOutlined, RobotOutlined, ThunderboltOutlined,
-  BellOutlined
+  RiseOutlined, FallOutlined, ThunderboltOutlined,
+  BellOutlined, RobotOutlined,
 } from '@ant-design/icons';
 import request from '../../utils/request';
 import dayjs from 'dayjs';
@@ -613,7 +613,8 @@ const Dashboard: React.FC = () => {
         style={{ marginTop: 20, borderRadius: 16 }}
         styles={{ body: { padding: 20 } }}
       >
-        <div className="dash-chart-enter" style={{ height: 320, width: '100%' }}>
+        <div className="dash-chart-enter" style={{ height: 320, width: '100%', minHeight: 320 }}>
+          {timeline.length > 0 ? (
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={timeline} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
               <defs>
@@ -659,6 +660,11 @@ const Dashboard: React.FC = () => {
               <Area type="monotone" dataKey="hires" name="入职" stroke="#8B5CF6" strokeWidth={2.5} fill="url(#gradHires)" dot={{ r: 3, fill: '#8B5CF6' }} activeDot={{ r: 5 }} animationDuration={1800} />
             </AreaChart>
           </ResponsiveContainer>
+          ) : (
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#94A3B8' }}>
+            暂无趋势数据
+          </div>
+          )}
         </div>
       </Card>
 

@@ -1,35 +1,39 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { createBrowserRouter, Navigate, useLocation } from 'react-router-dom';
 import AppLayout from '../components/Layout';
-import Login from '../pages/Login/index';
-import Dashboard from '../pages/Dashboard';
-import PositionsList from '../pages/Positions/List';
-import PositionForm from '../pages/Positions/Form';
-import ResumesList from '../pages/Resumes/List';
-import ResumeUpload from '../pages/Resumes/Upload';
-import ResumeDetail from '../pages/Resumes/Detail';
-import InterviewsList from '../pages/Interviews/List';
-import InterviewScore from '../pages/Interviews/Score';
-import InterviewResultPage from '../pages/Interviews/Result';
-import PublicJobDetail from '../pages/Public/JobDetail';
-import PublicReview from '../pages/Public/Review';
-import UsersList from '../pages/Settings/Users';
-import ProfileSettings from '../pages/Settings/Profile';
-import SystemSettingsPage from '../pages/Settings/System';
-import WorkflowsList from '../pages/Workflows/List';
-import RequisitionsList from '../pages/Requisitions/List';
-import TalentPoolList from '../pages/TalentPool/List';
-import InterviewerMappingList from '../pages/InterviewerMapping/List';
-import BackgroundChecksList from '../pages/BackgroundChecks/List';
-import OnboardingList from '../pages/Onboarding/List';
-import ProbationList from '../pages/Probation/List';
-import ResumeScreeningList from '../pages/ResumeScreening/List';
-import DailyReportsList from '../pages/DailyReports/List';
-import PositionMappings from '../pages/Settings/PositionMappings';
-import CapabilityDimensions from '../pages/Settings/CapabilityDimensions';
-import WorkflowEditor from '../pages/Workflows/Editor';
 import { useAuth } from '../contexts/AuthContext';
 import { Spin } from 'antd';
+
+// 关键页面（首屏立即加载）
+import Login from '../pages/Login/index';
+import Dashboard from '../pages/Dashboard';
+
+// 按需加载（lazy load）
+const PositionsList = lazy(() => import('../pages/Positions/List'));
+const PositionForm = lazy(() => import('../pages/Positions/Form'));
+const ResumesList = lazy(() => import('../pages/Resumes/List'));
+const ResumeUpload = lazy(() => import('../pages/Resumes/Upload'));
+const ResumeDetail = lazy(() => import('../pages/Resumes/Detail'));
+const InterviewsList = lazy(() => import('../pages/Interviews/List'));
+const InterviewScore = lazy(() => import('../pages/Interviews/Score'));
+const InterviewResultPage = lazy(() => import('../pages/Interviews/Result'));
+const PublicJobDetail = lazy(() => import('../pages/Public/JobDetail'));
+const PublicReview = lazy(() => import('../pages/Public/Review'));
+const UsersList = lazy(() => import('../pages/Settings/Users'));
+const ProfileSettings = lazy(() => import('../pages/Settings/Profile'));
+const SystemSettingsPage = lazy(() => import('../pages/Settings/System'));
+const WorkflowsList = lazy(() => import('../pages/Workflows/List'));
+const WorkflowEditor = lazy(() => import('../pages/Workflows/Editor'));
+const RequisitionsList = lazy(() => import('../pages/Requisitions/List'));
+const TalentPoolList = lazy(() => import('../pages/TalentPool/List'));
+const InterviewerMappingList = lazy(() => import('../pages/InterviewerMapping/List'));
+const BackgroundChecksList = lazy(() => import('../pages/BackgroundChecks/List'));
+const OnboardingList = lazy(() => import('../pages/Onboarding/List'));
+const ProbationList = lazy(() => import('../pages/Probation/List'));
+const ResumeScreeningList = lazy(() => import('../pages/ResumeScreening/List'));
+const DailyReportsList = lazy(() => import('../pages/DailyReports/List'));
+const PositionMappings = lazy(() => import('../pages/Settings/PositionMappings'));
+const CapabilityDimensions = lazy(() => import('../pages/Settings/CapabilityDimensions'));
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated, loading } = useAuth();
@@ -45,6 +49,17 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   return <>{children}</>;
 };
 
+/** 包裹懒加载组件的 Suspense fallback */
+const LazyPage = ({ children }: { children: React.ReactNode }) => (
+  <Suspense fallback={
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
+      <Spin size="large" tip="加载中..." />
+    </div>
+  }>
+    {children}
+  </Suspense>
+);
+
 const router = createBrowserRouter([
   {
     path: '/login',
@@ -52,11 +67,11 @@ const router = createBrowserRouter([
   },
   {
     path: '/public/jobs/:id',
-    element: <PublicJobDetail />,
+    element: <LazyPage><PublicJobDetail /></LazyPage>,
   },
   {
     path: '/public/review/:resumeId/:reviewerId',
-    element: <PublicReview />,
+    element: <LazyPage><PublicReview /></LazyPage>,
   },
   {
     path: '/',
@@ -76,99 +91,103 @@ const router = createBrowserRouter([
       },
       {
         path: 'positions',
-        element: <PositionsList />,
+        element: <LazyPage><PositionsList /></LazyPage>,
       },
       {
         path: 'positions/new',
-        element: <PositionForm />,
+        element: <LazyPage><PositionForm /></LazyPage>,
       },
       {
         path: 'positions/:id',
-        element: <PositionForm />,
+        element: <LazyPage><PositionForm /></LazyPage>,
       },
       {
         path: 'resumes',
-        element: <ResumesList />,
+        element: <LazyPage><ResumesList /></LazyPage>,
       },
       {
-        path: 'resumes/upload',
-        element: <ResumeUpload />,
+        path: 'resumes/new',
+        element: <LazyPage><ResumeUpload /></LazyPage>,
       },
       {
         path: 'resumes/:id',
-        element: <ResumeDetail />,
-      },
-      {
-        path: 'interviewer-mapping',
-        element: <InterviewerMappingList />,
+        element: <LazyPage><ResumeDetail /></LazyPage>,
       },
       {
         path: 'interviews',
-        element: <InterviewsList />,
+        element: <LazyPage><InterviewsList /></LazyPage>,
       },
       {
-        path: 'interviews/:id/score',
-        element: <InterviewScore />,
+        path: 'interviews/:id',
+        element: <LazyPage><InterviewScore /></LazyPage>,
       },
       {
         path: 'interviews/:id/result',
-        element: <InterviewResultPage />,
+        element: <LazyPage><InterviewResultPage /></LazyPage>,
       },
       {
-        path: 'settings/users',
-        element: <UsersList />,
+        path: 'interviews/:id/score',
+        element: <LazyPage><InterviewScore /></LazyPage>,
       },
       {
-        path: 'settings/profile',
-        element: <ProfileSettings />,
+        path: 'users',
+        element: <LazyPage><UsersList /></LazyPage>,
+      },
+      {
+        path: 'users/profile',
+        element: <LazyPage><ProfileSettings /></LazyPage>,
       },
       {
         path: 'settings/system',
-        element: <SystemSettingsPage />,
-      },
-      {
-        path: 'workflows',
-        element: <WorkflowsList />,
-      },
-      {
-        path: 'workflows/:id',
-        element: <WorkflowEditor />,
-      },
-      {
-        path: 'requisitions',
-        element: <RequisitionsList />,
-      },
-      {
-        path: 'talent-pool',
-        element: <TalentPoolList />,
-      },
-      {
-        path: 'background-checks',
-        element: <BackgroundChecksList />,
-      },
-      {
-        path: 'onboarding',
-        element: <OnboardingList />,
-      },
-      {
-        path: 'probation',
-        element: <ProbationList />,
-      },
-      {
-        path: 'resume-screening',
-        element: <ResumeScreeningList />,
-      },
-      {
-        path: 'daily-reports',
-        element: <DailyReportsList />,
+        element: <LazyPage><SystemSettingsPage /></LazyPage>,
       },
       {
         path: 'settings/position-mappings',
-        element: <PositionMappings />,
+        element: <LazyPage><PositionMappings /></LazyPage>,
       },
       {
         path: 'settings/capability-dimensions',
-        element: <CapabilityDimensions />,
+        element: <LazyPage><CapabilityDimensions /></LazyPage>,
+      },
+      {
+        path: 'workflows',
+        element: <LazyPage><WorkflowsList /></LazyPage>,
+      },
+      {
+        path: 'workflows/:id/edit',
+        element: <LazyPage><WorkflowEditor /></LazyPage>,
+      },
+      {
+        path: 'requisitions',
+        element: <LazyPage><RequisitionsList /></LazyPage>,
+      },
+      {
+        path: 'talent-pool',
+        element: <LazyPage><TalentPoolList /></LazyPage>,
+      },
+      {
+        path: 'interviewer-mapping',
+        element: <LazyPage><InterviewerMappingList /></LazyPage>,
+      },
+      {
+        path: 'background-checks',
+        element: <LazyPage><BackgroundChecksList /></LazyPage>,
+      },
+      {
+        path: 'onboarding',
+        element: <LazyPage><OnboardingList /></LazyPage>,
+      },
+      {
+        path: 'probation',
+        element: <LazyPage><ProbationList /></LazyPage>,
+      },
+      {
+        path: 'resume-screening',
+        element: <LazyPage><ResumeScreeningList /></LazyPage>,
+      },
+      {
+        path: 'daily-reports',
+        element: <LazyPage><DailyReportsList /></LazyPage>,
       },
     ],
   },
