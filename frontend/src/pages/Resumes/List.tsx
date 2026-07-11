@@ -1,10 +1,11 @@
-import React, { useEffect, useState, useRef, Suspense, lazy } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Table, Button, Space, message, Tag, Modal, Tooltip, Typography, Form, Select, Upload, Input, DatePicker, InputNumber, Card, Row, Col, Checkbox } from 'antd';
 import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, DownloadOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, SolutionOutlined, SyncOutlined, FileTextOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useNavigate } from 'react-router-dom';
 
-const PdfViewer = lazy(() => import('../../components/PdfViewer'));
+// PdfViewer 只在使用时动态加载（参见 renderPreviewModal）
+let PdfViewer: any = null;
 
 const { Title, Text } = Typography;
 
@@ -1153,13 +1154,7 @@ const ResumesList: React.FC = () => {
         styles={{ body: { height: '85vh', padding: 0 } }}
       >
         {previewPdfUrl ? (
-          <Suspense fallback={
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '80vh' }}>
-              <span style={{ color: '#999' }}>加载 PDF 引擎...</span>
-            </div>
-          }>
-            <PdfViewer pdfUrl={previewPdfUrl} />
-          </Suspense>
+          <DynamicPdfViewer pdfUrl={previewPdfUrl} />
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
             加载中...
@@ -1169,5 +1164,22 @@ const ResumesList: React.FC = () => {
     </div>
   );
 };
+
+/**
+ * 动态加载的 PdfViewer：仅在 Modal 打开时才开始加载 pdf.js chunk
+ */
+function DynamicPdfViewer({ pdfUrl }: { pdfUrl: string }) {
+  const [Comp, setComp] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    import('../../components/PdfViewer').then(mod => {
+      if (!cancelled) { setComp(() => mod.default); setLoading(false); }
+    });
+    return () => { cancelled = true; };
+  }, [pdfUrl]);
+  if (loading) return <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'80vh', color:'#999' }}>加载 PDF 引擎...</div>;
+  return <Comp pdfUrl={pdfUrl} />;
+}
 
 export default ResumesList;
