@@ -13,6 +13,7 @@ interface Env {
   FEISHU_REQUISITION_TABLE_ID?: string;
   FEISHU_POSITION_TABLE_ID?: string;
   FEISHU_TALENT_TABLE_ID?: string;
+  FEISHU_OAUTH_REDIRECT_URI?: string;
   RESUMES_KV?: KVNamespace;
 }
 
@@ -145,6 +146,21 @@ async function verifyPassword(secretKey: string, password: string, hash: string)
 
 
 // ==================== AI Helper ====================
+
+// 从 system_configs 读取自定义 prompt，没有则返回 null
+async function getCustomPrompt(env: Env, key: string): Promise<{ system: string; user: string } | null> {
+  try {
+    const row = await env.DB.prepare(
+      'SELECT prompt_configs FROM system_configs ORDER BY updated_at DESC LIMIT 1'
+    ).first() as any;
+    if (!row?.prompt_configs) return null;
+    const configs = JSON.parse(row.prompt_configs);
+    const prompts = configs.prompts || configs;
+    return prompts[key] || null;
+  } catch {
+    return null;
+  }
+}
 
 async function callAI(env: Env, systemPrompt: string, userPrompt: string, model?: string): Promise<string> {
   // 优先使用 DeepSeek（或兼容的 OpenAI API）
@@ -329,7 +345,7 @@ app.put('/api/auth/me', authMiddleware, async (c) => {
   const user = c.get('user');
   const body = await c.req.json();
   const updates: Record<string, any> = {};
-  for (const k of ['full_name']) {
+  for (const k of ['full_name', 'feishu_open_id', 'feishu_name']) {
     if (body[k] !== undefined) updates[k] = body[k];
   }
   if (Object.keys(updates).length === 0) return c.json(serializeUser(user));
@@ -351,6 +367,88 @@ app.put('/api/auth/change-password', authMiddleware, async (c) => {
   return c.json({ detail: 'Password changed' });
 });
 
+// 飞书 OAuth：获取授权链接
+app.get('/api/auth/feishu-oauth-url', authMiddleware, async (c) => {
+  const user = c.get('user');
+  const token = await createJwt(c.env.SECRET_KEY, user.email);
+  const baseUrl = c.env.FEISHU_OAUTH_REDIRECT_URI || (new URL(c.req.url).origin + '/api/auth/feishu-callback');
+  const appId = c.env.FEISHU_APP_ID || FEISHU_CONFIG.appId;
+  const oauthUrl = `https://open.feishu.cn/open-apis/authen/v1/index?redirect_uri=${encodeURIComponent(baseUrl)}&app_id=${appId}&state=${token}`;
+  return c.json({ url: oauthUrl });
+});
+
+// 飞书 OAuth：回调处理
+app.get('/api/auth/feishu-callback', async (c) => {
+  try {
+    const code = c.req.query('code') || '';
+    const state = c.req.query('state') || '';
+    if (!code) return c.json({ detail: 'Missing code' }, 400);
+
+    // 从 state 解析 JWT 获取用户身份
+    let userEmail = '';
+    const payload = await verifyJwt(c.env.SECRET_KEY, state);
+    if (payload && payload.sub) {
+      userEmail = payload.sub;
+    } else {
+      userEmail = state;
+    }
+    if (!userEmail) return c.json({ detail: 'Invalid state' }, 400);
+
+    // 用 code 换 user_access_token
+    const appId = c.env.FEISHU_APP_ID || FEISHU_CONFIG.appId;
+    const appSecret = c.env.FEISHU_APP_SECRET || FEISHU_CONFIG.appSecret;
+
+    const tokenResp = await fetch('https://open.feishu.cn/open-apis/authen/v1/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'authorization_code',
+        code,
+        app_id: appId,
+        app_secret: appSecret,
+      }),
+    });
+    const tokenData = await tokenResp.json() as any;
+    if (tokenData.code !== 0) {
+      console.error(`飞书 OAuth token 交换失败: ${JSON.stringify(tokenData)}`);
+      return c.redirect('/settings/profile?feishu_error=1');
+    }
+
+    const userAccessToken = tokenData.data.access_token;
+    const userInfoResp = await fetch('https://open.feishu.cn/open-apis/authen/v1/user_info', {
+      headers: { Authorization: `Bearer ${userAccessToken}` },
+    });
+    const userInfoData = await userInfoResp.json() as any;
+    if (userInfoData.code !== 0) {
+      console.error(`飞书 OAuth 获取用户信息失败: ${JSON.stringify(userInfoData)}`);
+      return c.redirect('/settings/profile?feishu_error=1');
+    }
+
+    const feishuOpenId = userInfoData.data.open_id || userInfoData.data.sub || '';
+    const feishuName = userInfoData.data.name || '';
+
+    if (feishuOpenId) {
+      await c.env.DB.prepare('UPDATE users SET feishu_open_id = ?, feishu_name = ?, updated_at = ? WHERE email = ?')
+        .bind(feishuOpenId, feishuName, now(), userEmail).run();
+    }
+
+    return c.redirect('/settings/profile?feishu_bound=1');
+  } catch (e: any) {
+    console.error(`飞书 OAuth 回调错误: ${e.message}`);
+    return c.redirect('/settings/profile?feishu_error=1');
+  }
+});
+
+// 更新飞书 OAuth 绑定信息
+app.put('/api/auth/me/feishu', authMiddleware, async (c) => {
+  const user = c.get('user');
+  const { feishu_open_id, feishu_name } = await c.req.json();
+  await c.env.DB.prepare('UPDATE users SET feishu_open_id = ?, feishu_name = ?, updated_at = ? WHERE id = ?')
+    .bind(feishu_open_id || '', feishu_name || '', now(), user.id).run();
+  const updated = await getUser(c.env.DB, user.email);
+  return c.json(serializeUser(updated));
+});
+
 app.get('/api/auth/users', authMiddleware, requireRole(['admin']), async (c) => {
   const result = await c.env.DB.prepare('SELECT * FROM users ORDER BY created_at DESC').all();
   return c.json(result.results.map(serializeUser));
@@ -361,7 +459,7 @@ app.post('/api/auth/users', authMiddleware, requireRole(['admin']), async (c) =>
   const id = uuid();
   const hash = await hashPassword(c.env.SECRET_KEY, body.password || 'demo123');
   await c.env.DB.prepare(
-    'INSERT INTO users (id, email, hashed_password, full_name, role, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)'
+    'INSERT INTO users (id, email, hashed_password, full_name, role, is_active, feishu_open_id, feishu_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, \'\', \'\', ?, ?)'
   ).bind(id, body.email, hash, body.full_name || '', (body.role || 'hr').toLowerCase(), now(), now()).run();
   const user = await getUser(c.env.DB, body.email);
   return c.json(serializeUser(user));
@@ -371,7 +469,7 @@ app.put('/api/auth/users/:id', authMiddleware, requireRole(['admin']), async (c)
   const id = c.req.param('id');
   const body = await c.req.json();
   const updates: Record<string, any> = {};
-  for (const k of ['full_name', 'email', 'role']) {
+  for (const k of ['full_name', 'email', 'role', 'feishu_token']) {
     if (body[k] !== undefined) updates[k] = k === 'role' ? body[k].toLowerCase() : body[k];
   }
   if (body.is_active !== undefined) updates.is_active = body.is_active ? 1 : 0;
@@ -464,19 +562,60 @@ app.get('/api/dashboard/funnel', authMiddleware, async (c) => {
   return c.json({ stages: result, total_resumes: totalResumes, conversion_rate: totalResumes > 0 ? Math.round((result[4].count / totalResumes) * 100) : 0 });
 });
 
-app.get('/api/dashboard/positions', authMiddleware, async (c) => {
+app.get('/api/dashboard/positions-detail', authMiddleware, async (c) => {
   const db = c.env.DB;
-  const positions = await db.prepare("SELECT * FROM positions ORDER BY created_at DESC LIMIT 10").all();
-  const result = [];
-  for (const pos of positions.results) {
-    const r = await db.prepare("SELECT COUNT(*) as cnt FROM resumes WHERE position_id = ?").bind(pos.id).first();
-    const ps = await db.prepare("SELECT COUNT(*) as cnt FROM resumes WHERE position_id = ? AND stage = 'new'").bind(pos.id).first();
-    const pi = await db.prepare("SELECT COUNT(*) as cnt FROM resumes WHERE position_id = ? AND stage = 'interview'").bind(pos.id).first();
-    result.push({
-      id: pos.id, title: pos.title, department: pos.department, status: pos.status,
-      total_resumes: r?.cnt || 0, pending_screening: ps?.cnt || 0, pending_interview: pi?.cnt || 0
-    });
-  }
+  const positions = await db.prepare("SELECT * FROM positions ORDER BY created_at DESC").all();
+
+  const result = await Promise.all(positions.results.map(async (pos: any) => {
+    const [
+      rCnt, f1Cnt, f1Pass, f2Pass, f3Pass, oCnt, hCnt
+    ] = await Promise.all([
+      db.prepare("SELECT COUNT(*) as cnt FROM resumes WHERE position_id = ?").bind(pos.id).first(),
+      db.prepare("SELECT COUNT(*) as cnt FROM interviews WHERE position_id = ? AND round = 1 AND status = 'scheduled'").bind(pos.id).first(),
+      db.prepare("SELECT COUNT(*) as cnt FROM interviews WHERE position_id = ? AND round = 1 AND (result = 'pass' OR status2 = 'passed')").bind(pos.id).first(),
+      db.prepare("SELECT COUNT(*) as cnt FROM interviews WHERE position_id = ? AND round = 2 AND (result = 'pass' OR status2 = 'passed')").bind(pos.id).first(),
+      db.prepare("SELECT COUNT(*) as cnt FROM interviews WHERE position_id = ? AND round = 3 AND (result = 'pass' OR status2 = 'passed')").bind(pos.id).first(),
+      db.prepare("SELECT COUNT(*) as cnt FROM offers WHERE position_id = ? AND status NOT IN ('draft','cancelled')").bind(pos.id).first(),
+      db.prepare("SELECT COUNT(*) as cnt FROM onboarding_records WHERE position_id = ? AND status = 'onboarded'").bind(pos.id).first(),
+    ]);
+
+    const totalResumes = rCnt?.cnt || 0;
+    const firstInterview = (f1Cnt?.cnt || 0) + (f1Pass?.cnt || 0);
+    const firstPass = f1Pass?.cnt || 0;
+    const secondPass = f2Pass?.cnt || 0;
+    const thirdPass = f3Pass?.cnt || 0;
+    const offers = oCnt?.cnt || 0;
+    const hired = hCnt?.cnt || 0;
+
+    let passRate = '0%';
+    if (firstInterview > 0) {
+      passRate = Math.round(firstPass / firstInterview * 100) + '%';
+    }
+
+    const statusMap: Record<string, string> = {
+      'open': '招聘中', 'published': '招聘中', 'closed': '已完成',
+      'draft': '草稿', 'paused': '暂停', 'cancelled': '已终止',
+    };
+    const displayStatus = statusMap[pos.status] || pos.status;
+
+    return {
+      division: pos.department || '',
+      hrbp: '',
+      position: pos.title,
+      headcount: pos.headcount || 1,
+      total_resumes: totalResumes,
+      first_interview: firstInterview,
+      first_pass: firstPass,
+      second_pass: secondPass,
+      third_pass: thirdPass,
+      pass_rate: passRate,
+      offers,
+      hired,
+      notes: '',
+      status: displayStatus,
+    };
+  }));
+
   return c.json(result);
 });
 
@@ -502,16 +641,65 @@ app.get('/api/dashboard/interviewers', authMiddleware, async (c) => {
 
 app.get('/api/dashboard/overview', authMiddleware, async (c) => {
   const db = c.env.DB;
-  const totalPos = await db.prepare("SELECT COUNT(*) as cnt FROM positions").first();
-  const activePos = await db.prepare("SELECT COUNT(*) as cnt FROM positions WHERE status IN ('open','published')").first();
-  const totalResumes = await db.prepare("SELECT COUNT(*) as cnt FROM resumes").first();
-  const pendingResumes = await db.prepare("SELECT COUNT(*) as cnt FROM resumes WHERE status LIKE 'pending%'").first();
-  const totalInterviews = await db.prepare("SELECT COUNT(*) as cnt FROM interviews").first();
-  const completedInterviews = await db.prepare("SELECT COUNT(*) as cnt FROM interviews WHERE status = 'completed'").first();
+
+  // 并行查询所有汇总数据
+  const [
+    activePos, totalPos, totalResumes, scheduledIvs, completedIvs,
+    passedIvs, offersRs, hiredRs, pendingOb, totalOb
+  ] = await Promise.all([
+    db.prepare("SELECT COUNT(*) as cnt FROM positions WHERE status IN ('open','published')").first(),
+    db.prepare("SELECT COALESCE(SUM(headcount),0) as cnt FROM positions WHERE status IN ('open','published')").first(),
+    db.prepare("SELECT COUNT(*) as cnt FROM resumes").first(),
+    db.prepare("SELECT COUNT(*) as cnt FROM interviews WHERE status = 'scheduled'").first(),
+    db.prepare("SELECT COUNT(*) as cnt FROM interviews WHERE status = 'completed'").first(),
+    db.prepare("SELECT COUNT(*) as cnt FROM interviews WHERE result = 'pass' OR status2 = 'passed'").first(),
+    db.prepare("SELECT COUNT(*) as cnt FROM offers WHERE status NOT IN ('draft','cancelled')").first(),
+    db.prepare("SELECT COUNT(*) as cnt FROM onboarding_records WHERE status = 'onboarded'").first(),
+    db.prepare("SELECT COUNT(*) as cnt FROM onboarding_records WHERE status = 'pending'").first(),
+    db.prepare("SELECT COUNT(*) as cnt FROM onboarding_records").first(),
+  ]);
+
+  const ap = activePos?.cnt || 0;
+  const th = totalPos?.cnt || 0;
+  const tr = totalResumes?.cnt || 0;
+  const si = scheduledIvs?.cnt || 0;
+  const ci = completedIvs?.cnt || 0;
+  const pi = passedIvs?.cnt || 0;
+  const of = offersRs?.cnt || 0;
+  const hi = hiredRs?.cnt || 0;
+  const po = pendingOb?.cnt || 0;
+
+  // 转化率计算
+  const pushConversionRate = tr > 0 ? Math.round((si + ci) / tr * 100) : 0;
+  const interviewPassRate = ci > 0 ? Math.round(pi / ci * 100) : 0;
+  const offerConversionRate = pi > 0 ? Math.round(of / pi * 100) : 0;
+  const hireConversionRate = of > 0 ? Math.round(hi / of * 100) : 0;
+
   return c.json({
-    total_positions: totalPos?.cnt || 0, active_positions: activePos?.cnt || 0,
-    total_resumes: totalResumes?.cnt || 0, pending_resumes: pendingResumes?.cnt || 0,
-    total_interviews: totalInterviews?.cnt || 0, completed_interviews: completedInterviews?.cnt || 0,
+    overview: {
+      active_positions: ap,
+      total_headcount: th,
+      total_resumes: tr,
+      scheduled_interviews: si,
+      push_conversion_rate: pushConversionRate,
+      interview_pass_rate: interviewPassRate,
+      offers: of,
+      offer_conversion_rate: offerConversionRate,
+      hired: hi,
+      hire_conversion_rate: hireConversionRate,
+      pending_onboarding: po,
+      last_updated: new Date().toISOString(),
+    },
+    funnel: {
+      stages: [
+        { name: '简历推送', count: tr },
+        { name: '安排面试', count: si + ci },
+        { name: '面试通过', count: pi },
+        { name: '发放Offer', count: of },
+        { name: '已入职', count: hi },
+      ],
+    },
+    divisions: [],
   });
 });
 
@@ -838,6 +1026,16 @@ function extractResumeFile(fieldValue: any): { file_token?: string; name?: strin
   return null;
 }
 
+// 从 position_mappings 表构建 raw_name → mapped_name 映射
+async function buildPositionMapping(db: any): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const mappings = await db.prepare('SELECT raw_name, mapped_name FROM position_mappings').all();
+  (mappings.results || []).forEach((r: any) => {
+    if (r.raw_name && r.mapped_name) map.set(r.raw_name, r.mapped_name);
+  });
+  return map;
+}
+
 // 从招聘任务记录转成前端可用的格式
 function parseRequisitionRecord(record: any): any {
   const f = record.fields || {};
@@ -862,7 +1060,7 @@ function parseRequisitionRecord(record: any): any {
     capability_dimensions: getFirstValue(f['岗位能力维度要求']) || '',
     city_tier: getFirstValue(f['城市等级']) || '',
     in_budget: getFirstValue(f['是否在编制内']) || '',
-    responsible_person: getFirstValue(f['责任人']) || getFirstValue(f['招聘账号']) || '',
+    responsible_person: getUserName(f['责任人']) || getFirstValue(f['招聘账号']) || '',
     recruitment_account: getFirstValue(f['招聘账号']) || '',
     hr_interviewer: getUserName(f['HR二面']),
     biz_interviewer: getUserName(f['业务一面']),
@@ -1095,6 +1293,35 @@ app.get('/api/interviews', authMiddleware, async (c) => {
 
 // ==================== CRUD Registration ====================
 
+// 自定义 positions 列表（多租户：非admin只看自己负责的岗位）
+app.get('/api/positions', authMiddleware, async (c) => {
+  const db = c.env.DB;
+  const user = c.get('user');
+  const isAdmin = user?.role === 'admin';
+  let sql = `SELECT * FROM positions`;
+  const conditions: string[] = [];
+  const binds: any[] = [];
+
+  // 搜索过滤
+  const title = c.req.query('title');
+  if (title) { conditions.push(`title LIKE ?`); binds.push(`%${title}%`); }
+  const status = c.req.query('status');
+  if (status) { conditions.push(`status = ?`); binds.push(status); }
+  const department = c.req.query('department');
+  if (department) { conditions.push(`department LIKE ?`); binds.push(`%${department}%`); }
+
+  // 多租户过滤
+  if (!isAdmin && user?.full_name) {
+    conditions.push(`responsible_person = ?`);
+    binds.push(user.full_name);
+  }
+
+  if (conditions.length > 0) sql += ' WHERE ' + conditions.join(' AND ');
+  sql += ' ORDER BY created_at DESC';
+  const result = await db.prepare(sql).bind(...binds).all();
+  return c.json(result.results.map(transformRow));
+});
+
 registerCrud('positions', 'positions', { title: 'like', status: 'eq', department: 'like' });
 // interviews → 保留 D1（面试记录暂不迁移）
 registerCrud('interviews', 'interviews', { position_id: 'eq', status: 'eq' });
@@ -1180,12 +1407,27 @@ app.delete('/api/requisitions/:id', authMiddleware, async (c) => {
 // ---- 人才库：直读飞书人才库表 ----
 app.get('/api/talent-pool', authMiddleware, async (c) => {
   try {
+    const user = c.get('user');
     const tableId = getBitableTableId(c.env, 'talent');
     const records = await bitableListRecords(c.env, tableId);
-    const items = records.map(parseTalentRecord);
+    let items = records.map(parseTalentRecord);
 
-    const statusFilter = c.req.query('status');
-    const nameFilter = c.req.query('candidate_name');
+    // 非管理员：只显示自己负责岗位的简历
+    if (user.role !== 'admin' && user.full_name) {
+      const posRows = await c.env.DB.prepare(
+        'SELECT DISTINCT title FROM positions WHERE (responsible_person = ? OR responsible_person LIKE ?) AND status = ?'
+      ).bind(user.full_name, '%' + user.full_name + '%', 'open').all();
+      const myPositions: string[] = [];
+      for (const row of (posRows.results || [])) myPositions.push((row as any).title);
+      const mapRows = await c.env.DB.prepare(
+        'SELECT DISTINCT mapped_name FROM position_mappings WHERE (responsible_person = ? OR responsible_person LIKE ?)'
+      ).bind(user.full_name, '%' + user.full_name + '%').all();
+      for (const row of (mapRows.results || [])) myPositions.push((row as any).mapped_name);
+      const posSet = new Set(myPositions.map((p: string) => p.trim().toLowerCase()));
+      items = items.filter((i: any) => { const pos = (i.mapped_position || i.position_applied || '').trim().toLowerCase(); return posSet.has(pos); });
+    }
+
+    const nameFilter = c.req.query('candidate_name');const statusFilter = c.req.query('status');
     let filtered = items;
     if (statusFilter) {
       filtered = filtered.filter(i => i.status === statusFilter);
@@ -1585,7 +1827,7 @@ app.post('/api/resumes', authMiddleware, async (c) => {
       return c.json({ detail: '保存文件失败: ' + e.message }, 500);
     }
 
-    // 3. AI 解析简历
+    // 3. AI 解析简历（两阶段：先转文本 → 再提取结构化信息）
     let parsedName = fileNameWithoutExt;
     let parsedGender = '';
     let parsedAge: number | null = null;
@@ -1594,21 +1836,62 @@ app.post('/api/resumes', authMiddleware, async (c) => {
     let parsedAdvantage = '';
     let parsedRisk = '';
     let parsedEval = '';
+    let parsedPhone = '';
+    let parsedEmail = '';
+    let parsedSkills: string[] = [];
+    let parsedWorkYears: number | null = null;
+    let parsedExperience: string = '';
     try {
-      // 将 base64 PDF 发送给 AI 解析
-      const systemPrompt = `你是一个专业的简历解析助手。请从PDF简历内容中提取以下信息，并用JSON格式返回（不要加markdown代码块）：
+      // 第一阶段：把 base64 PDF 转为结构化文本（markdown）
+      const extractionPrompt = `你是一个PDF简历文本提取助手。下面是一份PDF简历的base64编码数据。请仔细阅读内容，将其转换为结构化的Markdown文本。保留所有可读的信息：姓名、联系方式、工作经历、教育背景、技能、项目经历等。如果内容中包含乱码或无法识别的字符，尽最大努力推断正确内容。直接输出Markdown文本，不要添加任何额外说明。`;
+      const extractedText = await callAI(c.env, extractionPrompt,
+        `以下是一份PDF简历的base64编码数据，请提取其中所有可读文本并转为Markdown格式（保留所有信息）：\n\n${fileBase64.substring(0, 32000)}${fileBase64.length > 32000 ? '\n\n[内容截断]' : ''}`, 'deepseek-chat');
+
+      // 将提取的文本存入 `raw_text`
+      if (extractedText && extractedText.length > 20) {
+        try {
+          await c.env.DB.prepare('UPDATE resumes SET raw_text = ?, updated_at = ? WHERE id = ?')
+            .bind(extractedText.substring(0, 50000), now(), recordId).run();
+        } catch {}
+      }
+
+      // 第二阶段：用提取的文本做深度解析（优先读取数据库中的自定义 prompt）
+      const customPrompt = await getCustomPrompt(c.env, 'parse_resume_pdf');
+      let systemPrompt: string, userPrompt: string;
+      if (customPrompt) {
+        let sp = customPrompt.system;
+        let up = customPrompt.user;
+        if (sp.includes('{candidate_name}')) sp = sp.replace(/\{candidate_name\}/g, fileNameWithoutExt);
+        if (up.includes('{candidate_name}')) up = up.replace(/\{candidate_name\}/g, fileNameWithoutExt);
+        if (up.includes('{resume_text}')) up = up.replace(/\{resume_text\}/g, extractedText || '');
+        systemPrompt = sp;
+        userPrompt = up;
+      } else {
+        // 增强版默认配置
+        systemPrompt = `你是一个专业的简历解析助手。请从简历文本中提取以下所有信息，并用JSON格式返回（不要加markdown代码块）。尽可能提取每个字段，找不到的字段设为null或空字符串。
+
 {
   "name": "候选人姓名",
-  "gender": "性别",
+  "gender": "性别（男/女）",
   "age": 年龄数字或null,
-  "education": "最高学历",
+  "phone": "手机号码",
+  "email": "电子邮箱",
+  "education": "最高学历（如：本科/硕士/博士）",
+  "school": "毕业院校",
+  "major": "专业",
   "city": "所在城市",
-  "advantage": "候选人核心优势分析（200字以内）",
-  "risk": "候选人潜在风险点（200字以内）",
+  "work_years": "工作年限（数字）",
+  "skills": ["技能1", "技能2", "技能3", "..."],
+  "current_company": "目前/最近所在公司",
+  "current_position": "目前/最近职位",
+  "work_experience_summary": "工作经历摘要（200字以内，突出公司、职位、职责、业绩）",
+  "advantage": "候选人核心优势分析（3-5个优势，200字以内）",
+  "risk": "候选人潜在风险点（如跳槽频繁、技能短板等，200字以内）",
   "evaluation": "综合评估（100字以内）"
 }`;
-      // 用 base64 数据作为 PDF 内容发送给 AI
-      const aiResp = await callAI(c.env, systemPrompt, `请解析以下PDF简历内容（base64编码）：\n\n${fileBase64.substring(0, 32000)}${fileBase64.length > 32000 ? '\n\n[内容截断，仅显示前32000字符]' : ''}`, 'deepseek-chat');
+        userPrompt = `以下是一份简历的文本内容，请从中提取所有字段信息：\n\n${extractedText || '（AI未能提取到文本，以下为原始base64数据）\n' + fileBase64.substring(0, 16000)}`;
+      }
+      const aiResp = await callAI(c.env, systemPrompt, userPrompt, 'deepseek-chat');
       if (aiResp) {
         const parsed = JSON.parse(extractJSON(aiResp) || '{}');
         parsedName = parsed.name || fileNameWithoutExt;
@@ -1619,6 +1902,11 @@ app.post('/api/resumes', authMiddleware, async (c) => {
         parsedAdvantage = parsed.advantage || '';
         parsedRisk = parsed.risk || '';
         parsedEval = parsed.evaluation || '';
+        parsedPhone = parsed.phone || '';
+        parsedEmail = parsed.email || '';
+        parsedSkills = Array.isArray(parsed.skills) ? parsed.skills : [];
+        parsedWorkYears = parsed.work_years || null;
+        parsedExperience = parsed.work_experience_summary || '';
       }
     } catch (aiErr: any) {
       console.error(`[Upload] AI parsing failed: ${aiErr.message}`);
@@ -1635,6 +1923,11 @@ app.post('/api/resumes', authMiddleware, async (c) => {
       if (parsedAdvantage) updateFields['优势分析'] = parsedAdvantage;
       if (parsedRisk) updateFields['风险点'] = parsedRisk;
       if (parsedEval) updateFields['AI简历评估'] = parsedEval;
+      if (parsedPhone) updateFields['手机'] = parsedPhone;
+      if (parsedEmail) updateFields['邮箱'] = parsedEmail;
+      if (parsedWorkYears) updateFields['工作年限'] = parsedWorkYears;
+      if (parsedSkills.length > 0) updateFields['技能'] = parsedSkills.join(', ');
+      if (parsedExperience) updateFields['工作经历'] = parsedExperience;
       await bitableUpdateRecord(c.env, tableId, recordId, updateFields);
     } catch (updateErr: any) {
       console.error(`[Upload] Failed to update bitable with AI data: ${updateErr.message}`);
@@ -1656,7 +1949,33 @@ app.get('/api/resumes', authMiddleware, async (c) => {
   try {
     const tableId = getBitableTableId(c.env, 'talent');
     const records = await bitableListRecords(c.env, tableId);
-    const items = records.map(parseTalentRecord);
+    let items = records.map(parseTalentRecord);
+
+    // 合并从AI提取的额外字段（专业等）
+    try {
+      const extras = await c.env.DB.prepare('SELECT * FROM resume_extras').all();
+      const extraMap = new Map((extras.results || []).map((r: any) => [r.feishu_record_id, r]));
+      items = items.map(item => {
+        const extra = extraMap.get(item.id);
+        if (extra) {
+          if (extra.major && !item.major) item.major = extra.major;
+          if (extra.gender && !item.gender) item.gender = extra.gender;
+          if (extra.education && !item.education) item.education = extra.education;
+          if (extra.age && !item.age) item.age = extra.age;
+        }
+        return item;
+      });
+    } catch {}
+
+    // 加载岗位映射表，将 position_applied 映射为标准岗位名
+    try {
+      const map = await buildPositionMapping(c.env.DB);
+      items = items.map((item: any) => {
+        item.standard_position = (item.position_applied && map.has(item.position_applied))
+          ? map.get(item.position_applied) : (item.position_applied || '');
+        return item;
+      });
+    } catch { /* 映射表不存在时不阻塞 */ }
 
     const nameFilter = c.req.query('candidate_name');
     const statusFilter = c.req.query('status');
@@ -1676,7 +1995,17 @@ app.get('/api/resumes/:id', authMiddleware, async (c) => {
     const tableId = getBitableTableId(c.env, 'talent');
     const record = await bitableGetRecord(c.env, tableId, c.req.param('id'));
     if (!record) return c.json({ detail: 'Not found' }, 404);
-    return c.json(parseTalentRecord(record));
+    const item = parseTalentRecord(record);
+    // 加载岗位映射
+    try {
+      const map = await buildPositionMapping(c.env.DB);
+      if (item.position_applied && map.has(item.position_applied)) {
+        item.standard_position = map.get(item.position_applied);
+      } else {
+        item.standard_position = item.position_applied || '';
+      }
+    } catch { item.standard_position = item.position_applied || ''; }
+    return c.json(item);
   } catch (e: any) {
     return c.json({ detail: e.message }, 500);
   }
@@ -2058,30 +2387,54 @@ app.post('/api/resumes/:id/reparse', authMiddleware, async (c) => {
   if (!resume) return c.json({ detail: 'Resume not found' }, 404);
   const rawText = resume.raw_text || resume.resume_markdown || '';
   if (!rawText) return c.json({ detail: 'No text to parse' }, 400);
-  const systemPrompt = `You are an expert HR recruiter and resume parser. Parse the resume text and perform AI screening analysis. Return a JSON object with two sections:
+  const candidateName = resume.candidate_name || resume.parsed_name || '';
+  // 优先读取数据库中的自定义 prompt，key 为 analyze_resume
+  const customPrompt = await getCustomPrompt(c.env, 'analyze_resume');
+  let systemPrompt: string, userPrompt: string;
+  if (customPrompt) {
+    let sp = customPrompt.system;
+    let up = customPrompt.user;
+    if (sp.includes('{candidate_name}')) sp = sp.replace(/\{candidate_name\}/g, candidateName);
+    if (up.includes('{candidate_name}')) up = up.replace(/\{candidate_name\}/g, candidateName);
+    if (up.includes('{resume_text}')) up = up.replace(/\{resume_text\}/g, rawText);
+    if (sp.includes('{resume_text}')) sp = sp.replace(/\{resume_text\}/g, rawText);
+    systemPrompt = sp;
+    userPrompt = up;
+  } else {
+    // 默认配置（中文增强版）
+    systemPrompt = `你是一位资深招聘专家和简历解析助手。请解析以下简历文本，提取完整信息并进行AI初筛评估。返回JSON格式（不要加markdown代码块），包含两部分：
 
-Section 1 - Basic Info:
-- candidate_name: full name
-- email: email address (or null if not found)
-- phone: phone number (or null if not found)
-- highest_degree: highest education degree
-- school: school name
-- major: major
-- years_of_experience: number
-- skills: array of skills
-- work_experience: array of { company, title, duration, description }
-- education: array of { school, degree, major, duration }
+第一部分 - 基础信息：
+- candidate_name: 候选人姓名（全名）
+- gender: 性别（男/女）
+- age: 年龄（数字）
+- phone: 手机号码
+- email: 电子邮箱
+- highest_degree: 最高学历
+- school: 毕业院校
+- major: 专业
+- graduation_year: 毕业年份
+- years_of_experience: 工作年限（数字）
+- current_company: 目前/最近所在公司
+- current_position: 目前/最近职位
+- salary_expectation: 期望薪资（如果有）
+- skills: 技能列表（数组）
+- certifications: 证书/资质（数组）
+- work_experience: 工作经历数组，每个包含 { company, title, duration, description, achievements }
+- education: 教育经历数组，每个包含 { school, degree, major, duration }
 
-Section 2 - AI Screening:
-- position: the position the candidate applied for (extract from filename or text)
-- advantage (优势分析): string describing 3-5 key strengths in Chinese
-- risk (风险点/劣势分析): string describing 2-4 weaknesses or risks in Chinese
-- match_score: integer 0-100 representing how well the candidate matches
-- recommendation: one of "strongly_recommend", "recommend", "neutral", "not_recommend", "strongly_not_recommend"
-- summary: brief analysis summary in Chinese (2-3 sentences)
-- suggested_questions: array of 3-5 interview questions in Chinese`;
+第二部分 - AI初筛评估：
+- position: 应聘岗位（从文件名或文本中提取）
+- advantage (优势分析): 用中文描述3-5个核心优势
+- risk (风险点/劣势分析): 用中文描述2-4个劣势或风险
+- match_score: 人岗匹配度（0-100的整数）
+- recommendation: 推荐建议（"strongly_recommend"/"recommend"/"neutral"/"not_recommend"/"strongly_not_recommend"）
+- summary: 综合分析摘要（中文，2-3句话）
+- suggested_questions: 建议面试问题（中文，3-5个）`;
+    userPrompt = '简历文本（请提取完整信息）：\n' + rawText;
+  }
   try {
-    const result = await callAI(c.env, systemPrompt, 'Resume text:\n' + rawText);
+    const result = await callAI(c.env, systemPrompt, userPrompt);
     let parsed: any;
     try { parsed = extractJSON(result); } catch { parsed = { raw_response: result }; }
     // Flatten nested structure (some AI models wrap Basic Info / AI Screening as sub-objects)
@@ -2723,13 +3076,13 @@ app.post('/api/workflows/:id/execute', authMiddleware, async (c) => {
 
 // ==================== Settings Routes ====================
 
-app.get('/api/settings/system', authMiddleware, async (c) => {
+app.get('/api/settings/system', authMiddleware, requireRole(['admin']), async (c) => {
   const row = await c.env.DB.prepare('SELECT * FROM system_configs ORDER BY updated_at DESC LIMIT 1').first();
   if (!row) return c.json({});
   return c.json(transformRow(row));
 });
 
-app.put('/api/settings/system', authMiddleware, async (c) => {
+app.put('/api/settings/system', authMiddleware, requireRole(['admin']), async (c) => {
   const body = await c.req.json();
   const existing = await c.env.DB.prepare('SELECT id FROM system_configs ORDER BY updated_at DESC LIMIT 1').first();
   if (existing) {
@@ -2772,8 +3125,12 @@ app.put('/api/settings/mail', authMiddleware, async (c) => {
 
 app.get('/api/settings/prompts', authMiddleware, async (c) => {
   const row = await c.env.DB.prepare('SELECT prompt_configs FROM system_configs ORDER BY updated_at DESC LIMIT 1').first();
-  if (!row?.prompt_configs) return c.json({});
-  try { return c.json(JSON.parse(row.prompt_configs)); } catch { return c.json({}); }
+  if (!row?.prompt_configs) return c.json({ prompts: {} });
+  try {
+    const configs = JSON.parse(row.prompt_configs);
+    // 确保返回的结构始终包含 prompts 字段
+    return c.json(typeof configs.prompts === 'object' ? configs : { prompts: configs });
+  } catch { return c.json({ prompts: {} }); }
 });
 
 app.get('/api/settings/prompts/:key', authMiddleware, async (c) => {
@@ -2786,11 +3143,95 @@ app.get('/api/settings/prompts/:key', authMiddleware, async (c) => {
 });
 
 app.get('/api/settings/prompts/variables', authMiddleware, async (c) => {
-  return c.json([]);
+  const variables_by_prompt: Record<string, Array<{ name: string; description: string }>> = {
+    generate_jd: [
+      { name: 'position_title', description: '岗位名称' },
+      { name: 'department', description: '所属部门' },
+      { name: 'requirements', description: '岗位要求' },
+      { name: 'salary_range', description: '薪资范围' },
+    ],
+    analyze_resume: [
+      { name: 'candidate_name', description: '候选人姓名' },
+      { name: 'position', description: '应聘岗位' },
+      { name: 'jd_text', description: '岗位描述' },
+      { name: 'resume_text', description: '简历文本' },
+    ],
+    generate_resume_markdown: [
+      { name: 'candidate_name', description: '候选人姓名' },
+      { name: 'resume_text', description: '简历原始文本' },
+      { name: 'position', description: '应聘岗位' },
+    ],
+    generate_interview_questions: [
+      { name: 'candidate_name', description: '候选人姓名' },
+      { name: 'position', description: '应聘岗位' },
+      { name: 'jd_text', description: '岗位描述' },
+      { name: 'resume_text', description: '简历文本' },
+      { name: 'dimensions', description: '评估维度' },
+    ],
+    generate_interview_evaluation: [
+      { name: 'candidate_name', description: '候选人姓名' },
+      { name: 'position', description: '应聘岗位' },
+      { name: 'questions', description: '面试题目' },
+      { name: 'answers', description: '候选人回答' },
+      { name: 'dimensions', description: '评估维度' },
+    ],
+    generate_interview_evaluation_from_transcript: [
+      { name: 'candidate_name', description: '候选人姓名' },
+      { name: 'position', description: '应聘岗位' },
+      { name: 'transcript', description: '面试转写文本' },
+      { name: 'dimensions', description: '评估维度' },
+    ],
+    generate_coding_test_evaluation: [
+      { name: 'candidate_name', description: '候选人姓名' },
+      { name: 'position', description: '应聘岗位' },
+      { name: 'test_description', description: '笔试题目描述' },
+      { name: 'code', description: '候选人提交的代码' },
+    ],
+    parse_resume_pdf: [
+      { name: 'candidate_name', description: '候选人姓名（从文件名提取）' },
+      { name: 'resume_text', description: '简历PDF的base64文本内容' },
+    ],
+  };
+  const all_variables: Record<string, string> = {};
+  for (const [, vars] of Object.entries(variables_by_prompt)) {
+    for (const v of vars) {
+      if (!all_variables[v.name]) {
+        all_variables[v.name] = v.description;
+      }
+    }
+  }
+  return c.json({ variables_by_prompt, all_variables });
 });
 
 app.put('/api/settings/prompts/:key', authMiddleware, async (c) => {
-  return c.json({ detail: 'Prompt updated' });
+  try {
+    const key = c.req.param('key');
+    const body = await c.req.json();
+    const { system, user } = body;
+    if (!system || !user) {
+      return c.json({ detail: 'system 和 user 字段为必填' }, 400);
+    }
+
+    const row = await c.env.DB.prepare('SELECT id, prompt_configs FROM system_configs ORDER BY updated_at DESC LIMIT 1').first();
+    let configs: any = {};
+    if (row?.prompt_configs) {
+      try { configs = JSON.parse(row.prompt_configs); } catch { configs = {}; }
+    }
+    if (!configs.prompts) configs.prompts = {};
+    configs.prompts[key] = { system, user };
+
+    if (row) {
+      await c.env.DB.prepare('UPDATE system_configs SET prompt_configs = ?, updated_at = ? WHERE id = ?')
+        .bind(JSON.stringify(configs), now(), (row as any).id).run();
+    } else {
+      const id = uuid();
+      await c.env.DB.prepare('INSERT INTO system_configs (id, prompt_configs, updated_at) VALUES (?, ?, ?)')
+        .bind(id, JSON.stringify(configs), now()).run();
+    }
+    return c.json({ detail: 'Prompt updated', key });
+  } catch (e: any) {
+    return c.json({ detail: '更新失败: ' + e.message }, 500);
+  }
 });
 
 app.post('/api/settings/mail/test', authMiddleware, async (c) => {
@@ -2834,6 +3275,7 @@ app.put('/api/settings/interviewers', authMiddleware, async (c) => {
 app.post('/api/settings/interviewers/notify-all', authMiddleware, async (c) => {
   try {
     const { title, content } = await c.req.json();
+    const operatorName = c.get('user')?.full_name || '';
     const rows = await c.env.DB.prepare('SELECT * FROM interviewer_mappings ORDER BY name').all();
     if (!rows.results || rows.results.length === 0) {
       return c.json({ detail: '没有配置面试官映射' }, 400);
@@ -2863,6 +3305,10 @@ app.post('/api/settings/interviewers/notify-all', authMiddleware, async (c) => {
               },
             },
           ],
+        },
+        {
+          tag: 'note',
+          elements: [{ tag: 'plain_text', content: `由 ${operatorName || '系统'} 发送 | AI 智能面试系统` }]
         },
       ],
     };
@@ -2920,6 +3366,17 @@ app.post('/api/init/reset', authMiddleware, requireRole(['admin']), async (c) =>
 });
 
 app.get('/api/init/status', authMiddleware, requireRole(['admin']), async (c) => {
+  // 自动迁移：补列（CREATE IF NOT EXISTS 无法补列，用 try/catch 安全执行）
+  const migrations = [
+    "ALTER TABLE positions ADD COLUMN responsible_person TEXT DEFAULT ''",
+    "ALTER TABLE positions ADD COLUMN personalized_requirements TEXT DEFAULT ''",
+    "ALTER TABLE positions ADD COLUMN capability_dimensions TEXT DEFAULT '[]'",
+    "ALTER TABLE users ADD COLUMN feishu_token TEXT DEFAULT ''",
+  ];
+  for (const sql of migrations) {
+    try { await c.env.DB.prepare(sql).run(); } catch { /* column may already exist */ }
+  }
+
   const counts: Record<string, number> = {};
   const tables = ['positions', 'resumes', 'interviews', 'users', 'job_requisitions'];
   for (const table of tables) {
@@ -2936,6 +3393,21 @@ registerCrud('position-mappings', 'position_mappings', { raw_name: 'like', mappe
 
 // CRUD for capability dimensions
 registerCrud('capability-dimensions', 'capability_dimensions', { position_name: 'like' });
+
+// 获取所有已有的能力维度名称列表（去重），供前端多选
+app.get('/api/capability-dimension-names', authMiddleware, async (c) => {
+  const db = c.env.DB;
+  const rows = await db.prepare("SELECT dimensions_json FROM capability_dimensions").all();
+  const names = new Set<string>();
+  for (const row of rows.results || []) {
+    let dims: any[] = [];
+    try { dims = JSON.parse((row as any).dimensions_json || '[]'); } catch {}
+    for (const d of dims) {
+      if (d.name) names.add(d.name);
+    }
+  }
+  return c.json(Array.from(names).sort());
+});
 
 // CRUD for recruitment tasks
 registerCrud('recruitment-tasks', 'recruitment_tasks', { status: 'eq', position_name: 'like' });
@@ -3278,6 +3750,74 @@ app.post('/api/daily-reports/generate', authMiddleware, async (c) => {
 app.delete('/api/daily-reports/:id', authMiddleware, async (c) => {
   await c.env.DB.prepare('DELETE FROM daily_reports WHERE id = ?').bind(c.req.param('id')).run();
   return c.json({ detail: 'Report deleted' });
+});
+
+// 发送日报到飞书
+app.post('/api/daily-reports/:id/send', authMiddleware, async (c) => {
+  try {
+    const body = await c.req.json();
+    const { target_type, target_id } = body;
+    if (!target_type || !target_id) {
+      return c.json({ detail: '请指定发送目标' }, 400);
+    }
+
+    const row = await c.env.DB.prepare('SELECT * FROM daily_reports WHERE id = ?').bind(c.req.param('id')).first();
+    if (!row) return c.json({ detail: '日报不存在' }, 404);
+
+    const r: any = transformRow(row);
+    const stats = r.content ? (() => { try { return JSON.parse(r.content); } catch { return {}; } })() : {};
+    const aiSummary = r.stats || '(无AI摘要)';
+
+    const cardContent = {
+      config: { wide_screen_mode: true },
+      header: {
+        title: { tag: 'plain_text', content: `📊 ${r.title || '招聘日报'}` },
+        template: 'blue',
+      },
+      elements: [
+        {
+          tag: 'div',
+          text: {
+            tag: 'lark_md',
+            content: [
+              `**报告日期**：${r.report_date || '-'}`,
+              `**待筛选**：${stats.pending_screening ?? '-'}`,
+              `**面试中**：${stats.active_interviews ?? '-'}`,
+              `**已通过**：${stats.approved_candidates ?? '-'}`,
+              `**入职中**：${stats.onboarding_count ?? '-'}`,
+              `**开放需求**：${stats.open_requisitions ?? '-'}`,
+              '',
+              `**📝 AI 摘要**`,
+              aiSummary.length > 500 ? aiSummary.slice(0, 500) + '...' : aiSummary,
+            ].join('\n'),
+          },
+        },
+        {
+          tag: 'hr',
+        },
+        {
+          tag: 'note',
+          elements: [
+            { tag: 'plain_text', content: `AI 智能招聘系统 · ${new Date().toLocaleString('zh-CN')}` },
+          ],
+        },
+      ],
+    };
+
+    const token = await getFeishuToken(c.env);
+
+    if (target_type === 'chat') {
+      await sendFeishuMessageToChat(token, target_id, cardContent);
+    } else if (target_type === 'user') {
+      await sendFeishuMessageToUser(token, target_id, cardContent);
+    } else {
+      return c.json({ detail: '不支持的发送类型' }, 400);
+    }
+
+    return c.json({ ok: true, detail: '发送成功' });
+  } catch (e: any) {
+    return c.json({ detail: '发送失败: ' + e.message }, 500);
+  }
 });
 
 
@@ -4183,7 +4723,7 @@ app.post('/api/cron/interview-reminder', async (c) => {
 /**
  * 构建面试官通知卡片 — 提醒面试官审阅新候选人
  */
-function buildInterviewerCard(name: string, position: string, city: string, analysis: string): any {
+function buildInterviewerCard(name: string, position: string, city: string, analysis: string, operatorName?: string): any {
   const summary = (analysis || '').substring(0, 500);
   return {
     config: { wide_screen_mode: true },
@@ -4204,7 +4744,7 @@ function buildInterviewerCard(name: string, position: string, city: string, anal
       { tag: 'hr' },
       {
         tag: 'note',
-        elements: [{ tag: 'plain_text', content: '请在系统中查看完整评估并进行面试安排。' }]
+        elements: [{ tag: 'plain_text', content: `${operatorName || '系统'} 推荐 | AI 智能面试系统` }]
       }
     ]
   };
@@ -4243,7 +4783,69 @@ async function sendFeishuMessageToUser(token: string, openId: string, cardConten
 }
 
 /** 通知候选人对应的面试官 */
-async function notifyInterviewersForCandidate(env: Env, token: string, record: any): Promise<void> {
+
+/**
+ * 获取简历原文（多维尝试）
+ * 1. resume_markdown
+ * 2. raw_text
+ * 3. 从 resume_files 表取 PDF base64 → 用 AI 提取文本
+ * 4. 兜底：仅返回基本信息汇总
+ */
+async function getResumeText(env: Env, candidateName: string): Promise<string> {
+  try {
+    const d1Row = await env.DB.prepare(
+      'SELECT resume_markdown, raw_text, id FROM resumes WHERE candidate_name = ? LIMIT 1'
+    ).bind(candidateName).first() as any;
+    if (d1Row?.resume_markdown) return d1Row.resume_markdown;
+    if (d1Row?.raw_text) return d1Row.raw_text;
+    if (d1Row?.id) {
+      const fileRow = await env.DB.prepare(
+        'SELECT content, file_name FROM resume_files WHERE id = ? LIMIT 1'
+      ).bind(d1Row.id).first() as any;
+      if (fileRow?.content) {
+        const base64Content = fileRow.content.substring(0, 100000);
+        try {
+          const extraction = await callAI(env,
+            'You are a PDF text extractor. Extract ALL readable text from this base64 PDF content. Return ONLY the extracted text, no explanations.',
+            'Extract resume text from this base64 PDF (' + (fileRow.file_name || 'resume.pdf') + '):\n\n' + base64Content,
+            'deepseek-chat'
+          );
+          if (extraction && extraction.length > 50) {
+            try {
+              await env.DB.prepare('UPDATE resumes SET raw_text = ? WHERE id = ?')
+                .bind(extraction, d1Row.id).run();
+            } catch {}
+            return extraction;
+          }
+        } catch {}
+      }
+    }
+    try {
+      const tableId = getBitableTableId(env, 'talent');
+      const records = await bitableListRecords(env, tableId);
+      const rec = records.find((r: any) => {
+        const f = r.fields || {};
+        return getFirstValue(f['姓名']) === candidateName;
+      });
+      if (rec) {
+        const f = rec.fields || {};
+        const parts: string[] = [];
+        if (getFirstValue(f['姓名'])) parts.push('姓名: ' + getFirstValue(f['姓名']));
+        if (getFirstValue(f['性别'])) parts.push('性别: ' + getFirstValue(f['性别']));
+        if (f['年龄']) parts.push('年龄: ' + f['年龄']);
+        if (getFirstValue(f['学历'])) parts.push('学历: ' + getFirstValue(f['学历']));
+        if (getFirstValue(f['学校'])) parts.push('学校: ' + getFirstValue(f['学校']));
+        if (getFirstValue(f['专业'])) parts.push('专业: ' + getFirstValue(f['专业']));
+        if (getFirstValue(f['优势分析'])) parts.push('\n优势分析:\n' + getFirstValue(f['优势分析']));
+        if (getFirstValue(f['风险点'])) parts.push('\n风险点:\n' + getFirstValue(f['风险点']));
+        if (parts.length > 0) return parts.join('\n');
+      }
+    } catch {}
+  } catch {}
+  return candidateName + ' - 无法获取简历原文';
+}
+
+async function notifyInterviewersForCandidate(env: Env, token: string, record: any, operatorName?: string): Promise<void> {
   const posName = record.mapped_position || record.position_applied?.split('_')[0] || '未知岗位';
   try {
     // 查找匹配的招聘任务
@@ -4257,7 +4859,7 @@ async function notifyInterviewersForCandidate(env: Env, token: string, record: a
       // 兜底：通知默认 HR
       const defaultOpenId = FEISHU_CONFIG.defaultHrOpenId;
       if (defaultOpenId) {
-        const cardContent = buildInterviewerCard(record.candidate_name, posName, record.city, record.ai_analysis);
+        const cardContent = buildInterviewerCard(record.candidate_name, posName, record.city, record.ai_analysis, operatorName);
         await sendFeishuMessageToUser(token, defaultOpenId, cardContent);
         console.log(`[NotifyInterviewers] ✅ 已通知默认 HR (${defaultOpenId})`);
       }
@@ -4291,7 +4893,7 @@ async function notifyInterviewersForCandidate(env: Env, token: string, record: a
         const openId = await getInterviewerOpenId(env, name);
 
         // 发送卡片
-        const cardContent = buildInterviewerCard(record.candidate_name, posName, record.city, record.ai_analysis);
+        const cardContent = buildInterviewerCard(record.candidate_name, posName, record.city, record.ai_analysis, operatorName);
         await sendFeishuMessageToUser(token, openId, cardContent);
         console.log(`[NotifyInterviewers] ✅ 已通知 ${name} (${openId}) - ${record.candidate_name}`);
       }
@@ -4313,8 +4915,9 @@ app.post('/api/resume-screening/:id/notify-interviewers', authMiddleware, async 
   if (!record) return c.json({ detail: '记录不存在' }, 404);
 
   try {
+    const currentUser = c.get('user');
     const token = await getFeishuToken(c.env);
-    await notifyInterviewersForCandidate(c.env, token, record);
+    await notifyInterviewersForCandidate(c.env, token, record, currentUser?.full_name);
     return c.json({ ok: true, message: `已通知对应面试官: ${record.candidate_name}` });
   } catch (err: any) {
     return c.json({ detail: `通知失败: ${err.message}` }, 500);
@@ -4328,7 +4931,189 @@ app.post('/api/resume-screening/:id/notify-interviewers', authMiddleware, async 
 // Root path serves static index.html via ASSETS fallback
 app.get('/api', (c) => c.json({ status: 'ok', service: 'ai-interview-api' }));
 
+// ==================== 数据修复：从飞书同步负责人到岗位 ====================
+
+/**
+ * 从飞书招聘任务表同步 责任人 → positions 表
+ * POST /api/auth/sync-responsible-persons
+ */
+app.post('/api/auth/sync-responsible-persons', authMiddleware, requireRole(['admin']), async (c) => {
+  try {
+    const tableId = getBitableTableId(c.env, 'requisition');
+    const records = await bitableListRecords(c.env, tableId);
+
+    // 按岗位名聚合责任人（取第一个有值的）
+    const personMap: Record<string, string> = {};
+    for (const rec of records) {
+      const f = rec.fields || {};
+      const title = getFirstValue(f['招聘岗位']) || '';
+      if (!title) continue;
+      const person = getUserName(f['责任人']) || '';
+      if (person && !personMap[title]) {
+        personMap[title] = person;
+      }
+    }
+
+    // 更新 positions 表
+    let updated = 0;
+    for (const [title, person] of Object.entries(personMap)) {
+      await c.env.DB.prepare('UPDATE positions SET responsible_person = ? WHERE title = ?')
+        .bind(person, title).run();
+      updated++;
+    }
+
+    // 同时更新 position_mappings 表
+    let mapUpdated = 0;
+    for (const [mappedName, person] of Object.entries(personMap)) {
+      const result = await c.env.DB.prepare(
+        'UPDATE position_mappings SET responsible_person = ? WHERE mapped_name = ? AND (responsible_person IS NULL OR responsible_person = ? OR responsible_person = ?)'
+      ).bind(person, mappedName, '', '[object Object]').run();
+      if (result.meta?.changes > 0) mapUpdated += result.meta.changes;
+    }
+
+    return c.json({
+      ok: true,
+      positions_updated: updated,
+      mappings_updated: mapUpdated,
+      persons: Object.entries(personMap).map(([t, p]) => `${t} → ${p}`),
+    });
+  } catch (e: any) {
+    return c.json({ detail: '同步失败: ' + e.message }, 500);
+  }
+});
+
+/**
+ * 修复 position_mappings 中 responsible_person 为 [object Object] 的问题
+ * POST /api/auth/fix-responsible-persons
+ */
+app.post('/api/auth/fix-responsible-persons', authMiddleware, requireRole(['admin']), async (c) => {
+  try {
+    // 直接从飞书拿数据修复
+    const tableId = getBitableTableId(c.env, 'requisition');
+    const records = await bitableListRecords(c.env, tableId);
+    const personMap: Record<string, string> = {};
+    for (const rec of records) {
+      const f = rec.fields || {};
+      const title = getFirstValue(f['招聘岗位']) || '';
+      if (!title) continue;
+      const person = getUserName(f['责任人']) || '';
+      if (person && !personMap[title]) personMap[title] = person;
+    }
+
+    // 每个岗位名只取一条 position_mappings 记录
+    let fixed = 0;
+    for (const [mappedName, person] of Object.entries(personMap)) {
+      const rows = await c.env.DB.prepare(
+        'SELECT id FROM position_mappings WHERE mapped_name = ? LIMIT 1'
+      ).bind(mappedName).all();
+      for (const row of (rows.results || [])) {
+        await c.env.DB.prepare('UPDATE position_mappings SET responsible_person = ? WHERE id = ?')
+          .bind(person, (row as any).id).run();
+        fixed++;
+      }
+    }
+    return c.json({ ok: true, fixed, persons: Object.entries(personMap).map(([t, p]) => `${t} → ${p}`) });
+  } catch (e: any) {
+    return c.json({ detail: '修复失败: ' + e.message }, 500);
+  }
+});
+
 // ==================== Static Asset Fallback (for Pages _worker.js mode) ====================
+
+
+// ==================== 自动 AI 评估端点 ====================
+
+app.post('/api/resumes/auto-evaluate', authMiddleware, async (c) => {
+  try {
+    const body = await c.req.json();
+    const candidateName = body.candidate_name || '';
+    if (!candidateName) return c.json({ detail: '需要提供候选人姓名' }, 400);
+    const resumeText = await getResumeText(c.env, candidateName);
+    if (resumeText.length < 10) return c.json({ detail: '无法获取简历原文' }, 400);
+    const evalResult = await callAIScreening(c.env, resumeText);
+    if (!evalResult) return c.json({ detail: 'AI评估失败' }, 500);
+    await c.env.DB.prepare('UPDATE resumes SET ai_evaluation = ?, updated_at = ? WHERE candidate_name = ?')
+      .bind(JSON.stringify(evalResult), new Date().toISOString(), candidateName).run();
+    try {
+      const tableId = getBitableTableId(c.env, 'talent');
+      const records = await bitableListRecords(c.env, tableId);
+      const rec = records.find((r: any) => {
+        const f = r.fields || {};
+        return getFirstValue(f['姓名']) === candidateName;
+      });
+      if (rec) {
+        await bitableUpdateRecord(c.env, tableId, rec.record_id, {
+          'AI简历评估': JSON.stringify(evalResult, null, 2),
+        });
+      }
+    } catch {}
+    return c.json({ ok: true, candidate_name: candidateName, dimensions: evalResult.dimensions || [], overall_score: evalResult.overall_score, summary: evalResult.summary });
+  } catch (e: any) {
+    return c.json({ detail: '自动评估失败: ' + e.message }, 500);
+  }
+});
+
+app.post('/api/resumes/auto-evaluate-all', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    const body = await c.req.json().catch(() => ({}));
+    const force = body.force === true;
+    const tableId = getBitableTableId(c.env, 'talent');
+    const records = await bitableListRecords(c.env, tableId);
+    let myPositions: string[] = [];
+    if (user.role !== 'admin' && user.full_name) {
+      const posRows = await c.env.DB.prepare(
+        'SELECT DISTINCT title FROM positions WHERE (responsible_person = ? OR responsible_person LIKE ?)'
+      ).bind(user.full_name, '%' + user.full_name + '%').all();
+      for (const row of (posRows.results || [])) myPositions.push((row as any).title);
+    }
+    let evaluated = 0, skipped = 0, failed = 0;
+    const errors: string[] = [], results: any[] = [];
+    for (const rec of records) {
+      const f = rec.fields || {};
+      const candidateName = getFirstValue(f['姓名']) || 'Unknown';
+      const position = getFirstValue(f['面试岗位']) || getFirstValue(f['招聘岗位匹配']) || '';
+      const existingEval = f['AI简历评估'];
+      if (user.role !== 'admin' && user.full_name && myPositions.length > 0 && !myPositions.includes(position)) continue;
+      if (!force && existingEval && String(existingEval).trim().length > 10) { skipped++; continue; }
+      try {
+        const resumeText = await getResumeText(c.env, candidateName);
+        if (resumeText.length < 10) { results.push({ name: candidateName, status: 'skip', reason: '无法获取简历原文' }); skipped++; continue; }
+        const evalResult = await callAIScreening(c.env, resumeText);
+        if (!evalResult) { results.push({ name: candidateName, status: 'fail', reason: 'AI评估返回空' }); failed++; continue; }
+        try { await c.env.DB.prepare('UPDATE resumes SET ai_evaluation = ?, raw_text = ?, updated_at = ? WHERE candidate_name = ?').bind(JSON.stringify(evalResult), resumeText.substring(0, 50000), new Date().toISOString(), candidateName).run(); } catch {}
+        try { await bitableUpdateRecord(c.env, tableId, rec.record_id, { 'AI简历评估': JSON.stringify(evalResult, null, 2), '简历文本': resumeText.substring(0, 50000) }); } catch {}
+        results.push({ name: candidateName, status: 'ok', dims: (evalResult.dimensions || []).length, score: evalResult.overall_score });
+        evaluated++;
+      } catch (e: any) { failed++; errors.push(candidateName + ': ' + e.message.substring(0, 100)); }
+    }
+    return c.json({ ok: true, total: records.length, evaluated, skipped, failed, results, errors: errors.slice(0, 20) });
+  } catch (e: any) { return c.json({ detail: '批量自动评估失败: ' + e.message }, 500); }
+});
+
+
+// 修复 position_mappings 中 responsible_person 字段（可能是对象而非字符串）
+app.post('/api/position-mappings/fix-responsible', authMiddleware, requireRole(['admin']), async (c) => {
+  try {
+    const rows = await c.env.DB.prepare('SELECT id, mapped_name, responsible_person FROM position_mappings').all();
+    let fixed = 0;
+    for (const row of (rows.results || [])) {
+      const r = row as any;
+      let person = r.responsible_person;
+      if (person && typeof person === 'object') {
+        try {
+          const parsed = typeof person === 'string' ? JSON.parse(person) : person;
+          if (parsed.name) person = parsed.name;
+          else if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].name) person = parsed[0].name;
+          else person = String(parsed);
+        } catch { person = String(person); }
+        await c.env.DB.prepare('UPDATE position_mappings SET responsible_person = ? WHERE id = ?').bind(person, r.id).run();
+        fixed++;
+      }
+    }
+    return c.json({ ok: true, fixed });
+  } catch (e: any) { return c.json({ detail: e.message }, 500); }
+});
 
 app.notFound((c) => {
   // API 路由返回 JSON
@@ -4336,6 +5121,121 @@ app.notFound((c) => {
     return c.json({ detail: 'Not found' }, 404);
   }
   // 非 API 路由 → 委托 ASSETS 处理（SPA 路由由 index.html 兜底）
+  if (c.env.ASSETS) {
+    return c.env.ASSETS.fetch(c.req.raw);
+  }
+  return c.text('Not found', 404);
+});
+
+// ==================== 修复：从AI评估文本中提取缺失的基本信息 ====================
+
+app.post('/api/resumes/fix-missing-fields', authMiddleware, requireRole(['admin']), async (c) => {
+  try {
+    // 创建缓存表（用于存储从AI提取的额外字段）
+    try { await c.env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS resume_extras (feishu_record_id TEXT PRIMARY KEY, major TEXT DEFAULT '', gender TEXT DEFAULT '', education TEXT DEFAULT '', age TEXT DEFAULT '', updated_at TEXT DEFAULT '')"
+    ).run(); } catch {}
+
+    // 从飞书获取全部简历
+    const tableId = getBitableTableId(c.env, 'talent');
+    const records = await bitableListRecords(c.env, tableId);
+    let updated = 0, skipped = 0, failed = 0;
+    const details: string[] = [];
+
+    // 分批处理，每批只处理10个，避免Cloudflare子请求限制
+    const BATCH_SIZE = 10;
+    let processedInBatch = 0;
+    for (let batchStart = 0; batchStart < records.length && processedInBatch < BATCH_SIZE; batchStart += 1) {
+      const rec = records[batchStart];
+      try {
+        const f = rec.fields || {};
+        const candidateName = getFirstValue(f['姓名']) || '';
+        const recordId = rec.record_id;
+        if (!candidateName || !recordId) { skipped++; continue; }
+
+        // 跳过已在 resume_extras 中且有值（含"无"）的记录
+        const existing = await c.env.DB.prepare('SELECT major FROM resume_extras WHERE feishu_record_id = ?').bind(recordId).first();
+        if (existing && (existing as any).major) { skipped++; continue; }
+
+        // 检查是否需要补充
+        const existingMajor = getFirstValue(f['专业']) || '';
+        const existingEdu = getFirstValue(f['学历']) || '';
+        const existingGender = getFirstValue(f['性别']) || '';
+        const existingAge = f['年龄'] || '';
+        const existingEval = getFirstValue(f['AI简历评估']) || '';
+
+        // 如果专业已在飞书有值则跳过
+        if (existingMajor) { skipped++; continue; }
+
+        // 用AI从评估文本中提取基本信息
+        const evalText = String(existingEval || '');
+        if (evalText.length < 50) { skipped++; details.push(`${candidateName}: 评估文本不足`); continue; }
+
+        const aiResult = await callAI(c.env,
+          '从以下简历评估文本中提取基本信息，只返回JSON：{"major":"专业名称","gender":"男/女","education":"学历","age":年龄数字}。字段找不到就填"无"。',
+          '评估文本：\n' + evalText.substring(0, 5000),
+          'deepseek-chat'
+        );
+
+        if (!aiResult) { skipped++; continue; }
+
+        let parsed: any;
+        const m = aiResult.match(/\{[\s\S]*\}/);
+        if (m) try { parsed = JSON.parse(m[0]); } catch {}
+
+        let major = parsed?.major && parsed.major !== '无' ? parsed.major : '';
+        const gender = parsed?.gender && parsed.gender !== '无' ? parsed.gender : '';
+        const education = parsed?.education && parsed.education !== '无' ? parsed.education : '';
+        const age = parsed?.age ? String(parsed.age) : '';
+
+        // 专业仍未找到 → 从PDF原文提取
+        if (!major) {
+          try {
+            const resumeText = await getResumeText(c.env, candidateName);
+            if (resumeText && resumeText.length > 100) {
+              const pdfExtract = await callAI(c.env,
+                '从以下简历原文中提取"专业"字段。只返回JSON：{"major":"专业名称"}。找不到就填"无"。',
+                '简历原文：\n' + resumeText.substring(0, 4000),
+                'deepseek-chat'
+              );
+              if (pdfExtract) {
+                const pm = pdfExtract.match(/\{[\s\S]*\}/);
+                if (pm) try { const pp = JSON.parse(pm[0]); if (pp.major && pp.major !== '无') major = pp.major; } catch {}
+              }
+            }
+          } catch {}
+        }
+
+        // 还是没有 → 填"无"
+        if (!major) major = '无';
+
+        // 保存到缓存表
+        await c.env.DB.prepare(
+          "INSERT OR REPLACE INTO resume_extras (feishu_record_id, major, gender, education, age, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
+        ).bind(recordId, major, gender || existingGender, education || existingEdu, age || String(existingAge)).run();
+
+        processedInBatch++;
+        updated++;
+        details.push(`${candidateName}: major=${major}`);
+      } catch (e: any) {
+        failed++;
+        details.push(`${getFirstValue(rec.fields?.['姓名']) || '?'}: ${e.message.substring(0, 80)}`);
+      }
+    }  // end for batch
+
+    return c.json({ ok: true, total: records.length, updated, skipped, failed, details });
+  } catch (e: any) {
+    return c.json({ detail: '处理失败: ' + e.message }, 500);
+  }
+});
+
+// SPA fallback: 非 API 路径委托 ASSETS 处理（SPA 路由由 index.html 兜底）
+app.notFound(async (c) => {
+  // API 路由返回 JSON 404
+  if (c.req.path.startsWith('/api/')) {
+    return c.json({ detail: 'Not found' }, 404);
+  }
+  // 非 API 路由 → 委托 ASSETS 处理（始终返回最新的静态资源版本）
   if (c.env.ASSETS) {
     return c.env.ASSETS.fetch(c.req.raw);
   }
