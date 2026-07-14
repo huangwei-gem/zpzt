@@ -383,6 +383,18 @@ app.get('/api/auth/feishu-oauth-url', authMiddleware, async (c) => {
   return c.json({ url: oauthUrl });
 });
 
+// 飞书 OAuth：管理员为指定用户生成授权链接
+app.post('/api/auth/feishu-oauth-url', authMiddleware, requireRole(['admin']), async (c) => {
+  const body = await c.req.json();
+  const email = body.email;
+  if (!email) return c.json({ detail: 'email required' }, 400);
+  const token = await createJwt(c.env.SECRET_KEY, email);
+  const baseUrl = c.env.FEISHU_OAUTH_REDIRECT_URI || (new URL(c.req.url).origin + '/api/auth/feishu-callback');
+  const appId = c.env.FEISHU_APP_ID || FEISHU_CONFIG.appId;
+  const oauthUrl = `https://open.feishu.cn/open-apis/authen/v1/index?redirect_uri=${encodeURIComponent(baseUrl)}&app_id=${appId}&state=${token}`;
+  return c.json({ url: oauthUrl, email });
+});
+
 // 飞书 OAuth：回调处理
 app.get('/api/auth/feishu-callback', async (c) => {
   try {

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Button, Space, message, Tag, Modal, Form, Input, Select, Card, Typography, Popconfirm, Tooltip } from 'antd';
-import { PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, StopOutlined, CheckCircleOutlined, KeyOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, StopOutlined, CheckCircleOutlined, KeyOutlined, CopyOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -29,6 +29,8 @@ const UsersList: React.FC = () => {
   const [form] = Form.useForm();
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [createdPassword, setCreatedPassword] = useState<string>('');
+  const [feishuUrl, setFeishuUrl] = useState<string>('');
+  const [feishuUrlLoading, setFeishuUrlLoading] = useState(false);
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -160,6 +162,24 @@ const UsersList: React.FC = () => {
     } catch (error: any) {
       message.error(error?.response?.data?.detail || '重置密码失败');
     }
+  };
+
+  const generateFeishuUrl = async (email: string, fullName: string) => {
+    setFeishuUrlLoading(true);
+    try {
+      const res = await request.post('/auth/feishu-oauth-url', { email });
+      setFeishuUrl((res as any).url || '');
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || '获取飞书授权链接失败');
+    } finally {
+      setFeishuUrlLoading(false);
+    }
+  };
+
+  const handleCloseModal = () => {
+    setIsModalVisible(false);
+    setCreatedPassword('');
+    setFeishuUrl('');
   };
 
   const handleBatchDelete = () => {
@@ -332,9 +352,10 @@ const UsersList: React.FC = () => {
         title={isEditModal ? '编辑用户' : '新增用户'}
         open={isModalVisible}
         onOk={handleOk}
-        onCancel={() => setIsModalVisible(false)}
+        onCancel={handleCloseModal}
         confirmLoading={submitting}
         destroyOnClose
+        width={560}
       >
         <Form form={form} layout="vertical">
           {!isEditModal && (
@@ -366,12 +387,51 @@ const UsersList: React.FC = () => {
               <Select.Option value="interviewer">面试官 (Interviewer)</Select.Option>
             </Select>
           </Form.Item>
-          <Form.Item
-            name="feishu_token"
-            label="飞书授权 Token"
-            help={isEditModal ? '更新 Token 后用户可继续使用飞书身份绑定功能' : '选填，用于飞书身份绑定'}
-          >
-            <Input placeholder="输入飞书 Open ID / Token，留空则不修改" />
+          <Form.Item label="飞书身份绑定">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <Button
+                onClick={() => {
+                  const email = form.getFieldValue('email');
+                  const name = form.getFieldValue('full_name');
+                  if (!email) { message.warning('请先填写邮箱'); return; }
+                  generateFeishuUrl(email, name);
+                }}
+                loading={feishuUrlLoading}
+                icon={<KeyOutlined />}
+                style={{ alignSelf: 'flex-start' }}
+              >
+                生成飞书授权链接
+              </Button>
+              {feishuUrl && (
+                <div
+                  style={{
+                    background: '#f5f5f5',
+                    border: '1px solid #d9d9d9',
+                    borderRadius: 6,
+                    padding: '8px 12px',
+                    wordBreak: 'break-all',
+                    fontSize: 12,
+                    fontFamily: 'monospace',
+                  }}
+                >
+                  <a href={feishuUrl} target="_blank" rel="noopener noreferrer">{feishuUrl}</a>
+                  <Button
+                    type="link"
+                    size="small"
+                    icon={<CopyOutlined />}
+                    onClick={() => {
+                      navigator.clipboard.writeText(feishuUrl).then(() => {
+                        message.success('授权链接已复制，发给用户去飞书授权');
+                      });
+                    }}
+                    style={{ float: 'right' }}
+                  />
+                </div>
+              )}
+              <Text style={{ fontSize: 12, color: '#999' }}>
+                点击按钮生成飞书 OAuth 授权链接，复制链接发给对应用户去飞书授权
+              </Text>
+            </div>
           </Form.Item>
         </Form>
       </Modal>
