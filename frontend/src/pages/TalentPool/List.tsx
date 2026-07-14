@@ -50,6 +50,7 @@ const TalentPoolList: React.FC = () => {
       await request.post('/interviews/create-from-talent', {
         candidate_name: name,
         position_applied: record.position_applied || '',
+        standard_position: record.standard_position || record.position_applied || '',
         city: record.city || '',
         feishu_record_id: record.feishu_record_id || record.id,
       });
@@ -76,12 +77,20 @@ const TalentPoolList: React.FC = () => {
   const columns = [
     { title: '姓名', dataIndex: 'candidate_name', key: 'candidate_name', width: 100 },
     {
-      title: '面试岗位', dataIndex: 'position_applied', key: 'position_applied', width: 140,
-      render: (v: string) => v || '-'
-    },
-    {
-      title: '匹配岗位', dataIndex: 'mapped_position', key: 'mapped_position', width: 120,
-      render: (v: string) => v || '-'
+      title: '标准岗位', key: 'position', width: 160,
+      render: (_: any, record: any) => {
+        const mapped = record.mapped_position || '';
+        const standard = record.standard_position || '';
+        const original = record.position_applied || '';
+        if (mapped) {
+          return (
+            <Tooltip title={`原始岗位: ${original || '-'}`}>
+              <Tag color="blue">{mapped}</Tag>
+            </Tooltip>
+          );
+        }
+        return <span>{standard || original || '-'}</span>;
+      }
     },
     {
       title: '年龄', dataIndex: 'age', key: 'age', width: 60,
@@ -163,7 +172,7 @@ const TalentPoolList: React.FC = () => {
   return (
     <div>
       <Card
-        title="人才库"
+        title="候选人管理"
         extra={
           <Space>
             <Input placeholder="搜索姓名" prefix={<SearchOutlined />} value={search} onChange={e => setSearch(e.target.value)} onPressEnter={fetchData} style={{ width: 180 }} allowClear />

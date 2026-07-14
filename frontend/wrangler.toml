@@ -1,0 +1,15 @@
+name = "ai-interview"
+compatibility_date = "2024-12-01"
+pages_build_output_dir = "dist"
+
+[vars]
+SECRET_KEY = "tUzr6Mh4QU6hxl2pUQtTrnZgMN8P/X//SkqwRVTQr9IrVmxO7WDd4naPQmmWIyiD"
+AI_BASE_URL = "https://api.deepseek.com"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ai-interview-db"
+database_id = "0eb6cbc3-93c7-4c9d-b933-57ff01a191cb"
+
+[ai]
+binding = "AI"

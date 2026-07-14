@@ -304,7 +304,7 @@ const authMiddleware = async (c: any, next: any) => {
 
 function serializeUser(user: any) {
   const { hashed_password, ...rest } = user;
-  return rest;
+  return { ...rest, has_password: !!hashed_password };
 }
 
 function requireRole(roles: string[]) {
@@ -339,6 +339,12 @@ app.post('/api/auth/token', async (c) => {
 app.get('/api/auth/me', authMiddleware, (c) => {
   const user = c.get('user');
   return c.json(serializeUser(user));
+});
+
+app.get('/api/auth/me/token', authMiddleware, async (c) => {
+  const user = c.get('user');
+  const token = await createJwt(c.env.SECRET_KEY, user.email);
+  return c.json({ token });
 });
 
 app.put('/api/auth/me', authMiddleware, async (c) => {
@@ -457,12 +463,14 @@ app.get('/api/auth/users', authMiddleware, requireRole(['admin']), async (c) => 
 app.post('/api/auth/users', authMiddleware, requireRole(['admin']), async (c) => {
   const body = await c.req.json();
   const id = uuid();
-  const hash = await hashPassword(c.env.SECRET_KEY, body.password || 'demo123');
+  const password = body.password || 'demo123';
+  const hash = await hashPassword(c.env.SECRET_KEY, password);
   await c.env.DB.prepare(
     'INSERT INTO users (id, email, hashed_password, full_name, role, is_active, feishu_open_id, feishu_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, \'\', \'\', ?, ?)'
   ).bind(id, body.email, hash, body.full_name || '', (body.role || 'hr').toLowerCase(), now(), now()).run();
   const user = await getUser(c.env.DB, body.email);
-  return c.json(serializeUser(user));
+  const serialized = serializeUser(user);
+  return c.json({ ...serialized, _plain_password: password }); // 返回明文密码，只创建时有效
 });
 
 app.put('/api/auth/users/:id', authMiddleware, requireRole(['admin']), async (c) => {
@@ -496,6 +504,16 @@ app.get('/api/auth/users/:id/status', authMiddleware, requireRole(['admin']), as
   const row = await c.env.DB.prepare('SELECT is_active FROM users WHERE id = ?').bind(id).first();
   if (!row) return c.json({ detail: 'User not found' }, 404);
   return c.json({ is_active: row.is_active === 1 });
+});
+
+app.put('/api/auth/users/:id/password', authMiddleware, requireRole(['admin']), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const newPassword = body.password || (Math.random().toString(36).slice(2, 10) + 'Aa1');
+  const hash = await hashPassword(c.env.SECRET_KEY, newPassword);
+  await c.env.DB.prepare('UPDATE users SET hashed_password = ?, updated_at = ? WHERE id = ?')
+    .bind(hash, now(), id).run();
+  return c.json({ _plain_password: newPassword });
 });
 
 app.delete('/api/auth/users/:id', authMiddleware, requireRole(['admin']), async (c) => {

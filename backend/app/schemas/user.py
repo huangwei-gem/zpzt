@@ -22,6 +22,9 @@ class UserUpdate(BaseModel):
 
 class UserUpdateMe(BaseModel):
     full_name: Optional[str] = None
+    password: Optional[str] = None
+    role: Optional[UserRole] = None
+    feishu_token: Optional[str] = None
 
 class ChangePasswordRequest(BaseModel):
     current_password: str

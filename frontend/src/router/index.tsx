@@ -22,19 +22,12 @@ const PublicReview = lazy(() => import('../pages/Public/Review'));
 const UsersList = lazy(() => import('../pages/Settings/Users'));
 const ProfileSettings = lazy(() => import('../pages/Settings/Profile'));
 const SystemSettingsPage = lazy(() => import('../pages/Settings/System'));
-const WorkflowsList = lazy(() => import('../pages/Workflows/List'));
-const WorkflowEditor = lazy(() => import('../pages/Workflows/Editor'));
+const MailSettings = lazy(() => import('../pages/Settings/Mail'));
 const RequisitionsList = lazy(() => import('../pages/Requisitions/List'));
-const TalentPoolList = lazy(() => import('../pages/TalentPool/List'));
-const InterviewerMappingList = lazy(() => import('../pages/InterviewerMapping/List'));
-const BackgroundChecksList = lazy(() => import('../pages/BackgroundChecks/List'));
 const OnboardingList = lazy(() => import('../pages/Onboarding/List'));
 const ProbationList = lazy(() => import('../pages/Probation/List'));
-const ResumeScreeningList = lazy(() => import('../pages/ResumeScreening/List'));
 const DailyReportsList = lazy(() => import('../pages/DailyReports/List'));
 const PositionMappings = lazy(() => import('../pages/Settings/PositionMappings'));
-const CapabilityDimensions = lazy(() => import('../pages/Settings/CapabilityDimensions'));
-
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated, loading } = useAuth();
   const location = useLocation();
@@ -49,7 +42,15 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   return <>{children}</>;
 };
 
-/** 包裹懒加载组件的 Suspense fallback */
+/** 路由级角色守卫 */
+const RoleRoute = ({ children, roles }: { children: React.ReactNode; roles: string[] }) => {
+  const { user } = useAuth();
+  const userRole = (user as any)?.role?.value ?? (user as any)?.role;
+  if (!roles.includes(userRole)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <>{children}</>;
+};
 const LazyPage = ({ children }: { children: React.ReactNode }) => (
   <Suspense fallback={
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
@@ -60,7 +61,14 @@ const LazyPage = ({ children }: { children: React.ReactNode }) => (
   </Suspense>
 );
 
+const OAuthCallback = lazy(() => import('../pages/OAuthCallback'));
+
 const router = createBrowserRouter([
+  // 公开路由（无需登录）
+  {
+    path: '/oauth/callback',
+    element: <LazyPage><OAuthCallback /></LazyPage>,
+  },
   {
     path: '/login',
     element: <Login />,
@@ -131,47 +139,27 @@ const router = createBrowserRouter([
       },
       {
         path: 'users',
-        element: <LazyPage><UsersList /></LazyPage>,
+        element: <RoleRoute roles={['admin']}><LazyPage><UsersList /></LazyPage></RoleRoute>,
       },
       {
-        path: 'users/profile',
+        path: 'settings/profile',
         element: <LazyPage><ProfileSettings /></LazyPage>,
       },
       {
         path: 'settings/system',
-        element: <LazyPage><SystemSettingsPage /></LazyPage>,
+        element: <RoleRoute roles={['admin']}><LazyPage><SystemSettingsPage /></LazyPage></RoleRoute>,
       },
       {
         path: 'settings/position-mappings',
-        element: <LazyPage><PositionMappings /></LazyPage>,
+        element: <RoleRoute roles={['admin']}><LazyPage><PositionMappings /></LazyPage></RoleRoute>,
       },
       {
-        path: 'settings/capability-dimensions',
-        element: <LazyPage><CapabilityDimensions /></LazyPage>,
-      },
-      {
-        path: 'workflows',
-        element: <LazyPage><WorkflowsList /></LazyPage>,
-      },
-      {
-        path: 'workflows/:id/edit',
-        element: <LazyPage><WorkflowEditor /></LazyPage>,
+        path: 'settings/mail',
+        element: <RoleRoute roles={['admin']}><LazyPage><MailSettings /></LazyPage></RoleRoute>,
       },
       {
         path: 'requisitions',
         element: <LazyPage><RequisitionsList /></LazyPage>,
-      },
-      {
-        path: 'talent-pool',
-        element: <LazyPage><TalentPoolList /></LazyPage>,
-      },
-      {
-        path: 'interviewer-mapping',
-        element: <LazyPage><InterviewerMappingList /></LazyPage>,
-      },
-      {
-        path: 'background-checks',
-        element: <LazyPage><BackgroundChecksList /></LazyPage>,
       },
       {
         path: 'onboarding',
@@ -180,10 +168,6 @@ const router = createBrowserRouter([
       {
         path: 'probation',
         element: <LazyPage><ProbationList /></LazyPage>,
-      },
-      {
-        path: 'resume-screening',
-        element: <LazyPage><ResumeScreeningList /></LazyPage>,
       },
       {
         path: 'daily-reports',

@@ -1,24 +1,31 @@
-﻿import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   Card, Button, Space, Tag, Modal, message, Typography,
-  Row, Col, Spin, Empty, Statistic, Table, Divider, DatePicker
+  Row, Col, Spin, Empty, Statistic, Divider, DatePicker, Select,
+  Input, Alert, Tooltip
 } from 'antd';
 import {
   ThunderboltOutlined, LoadingOutlined, ReloadOutlined,
-  DeleteOutlined, FileTextOutlined, BarChartOutlined,
-  RobotOutlined, CalendarOutlined
+  DeleteOutlined, RobotOutlined, SendOutlined,
+  ClockCircleOutlined, TeamOutlined, UserOutlined,
+  CheckCircleOutlined, FileTextOutlined
 } from '@ant-design/icons';
 import request from '../../utils/request';
 import dayjs from 'dayjs';
 
-const { Text, Paragraph, Title } = Typography;
+const { Text, Title } = Typography;
 
 const DailyReportsList: React.FC = () => {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [detailModal, setDetailModal] = useState<any>(null);
   const [selectedDate, setSelectedDate] = useState<dayjs.Dayjs>(dayjs());
+
+  // 发送到飞书
+  const [sendModal, setSendModal] = useState<any>(null);
+  const [sendTargetType, setSendTargetType] = useState<'chat' | 'user'>('chat');
+  const [sendTargetId, setSendTargetId] = useState('');
+  const [sending, setSending] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -64,146 +71,337 @@ const DailyReportsList: React.FC = () => {
     }
   };
 
-  const renderStats = (content: string) => {
+  // 打开发送对话框
+  const handleOpenSend = (record: any) => {
+    setSendModal(record);
+    setSendTargetType('chat');
+    setSendTargetId('');
+  };
+
+  // 执行发送
+  const handleSend = async () => {
+    if (!sendTargetId.trim()) {
+      message.warning('请输入飞书群 Chat ID 或用户 Open ID');
+      return;
+    }
+    setSending(true);
     try {
-      const stats = JSON.parse(content);
-      return (
-        <Row gutter={16}>
-          {Object.entries(stats).map(([key, val]: [string, any]) => (
-            <Col key={key} span={6} style={{ marginBottom: 12 }}>
-              <Statistic
-                title={key.replace(/_/g, ' ')}
-                value={val}
-                valueStyle={{ fontSize: 16 }}
-              />
-            </Col>
-          ))}
-        </Row>
-      );
-    } catch {
-      return <Text type="secondary">无统计数据</Text>;
+      await request.post(`/daily-reports/${sendModal.id}/send`, {
+        target_type: sendTargetType,
+        target_id: sendTargetId.trim(),
+      });
+      message.success('✅ 已成功发送到飞书');
+      setSendModal(null);
+    } catch (e: any) {
+      message.error('发送失败: ' + (e.response?.data?.detail || e.message));
+    } finally {
+      setSending(false);
     }
   };
 
-  const columns = [
-    {
-      title: '报告日期',
-      dataIndex: 'report_date',
-      key: 'report_date',
-      render: (v: string) => v || '-',
-    },
-    {
-      title: '类型',
-      dataIndex: 'report_type',
-      key: 'report_type',
-      render: (v: string) => {
-        const m: Record<string, string> = { progress: '招聘进展', interview_stats: '面试统计', leader_summary: '负责人汇总' };
-        return <Tag color="blue">{m[v] || v}</Tag>;
-      },
-    },
-    {
-      title: '标题',
-      dataIndex: 'title',
-      key: 'title',
-    },
-    {
-      title: '生成时间',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      render: (v: string) => v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-',
-    },
-    {
-      title: '操作',
-      key: 'action',
-      render: (_: any, record: any) => (
-        <Space>
-          <Button size="small" onClick={() => setDetailModal(record)}>查看</Button>
-          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)} />
-        </Space>
-      ),
-    },
-  ];
+  // 解析统计数据的工具函数
+  const parseStats = (content: string) => {
+    try { return JSON.parse(content); } catch { return null; }
+  };
+
+  // 截取 AI 摘要前 150 字
+  const summaryPreview = (text: string) => {
+    if (!text) return '';
+    return text.length > 150 ? text.slice(0, 150) + '...' : text;
+  };
 
   return (
     <div>
-      <Card
-        title="招聘日报"
-        extra={
+      {/* 顶部操作栏 */}
+      <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+        <div>
+          <Title level={2} style={{ margin: 0, fontWeight: 700 }}>招聘日报</Title>
+          <Text type="secondary">AI 自动生成每日招聘进展报告</Text>
+        </div>
+        <Space>
+          <DatePicker
+            value={selectedDate}
+            onChange={(d) => d && setSelectedDate(d)}
+            allowClear={false}
+          />
+          <Button
+            type="primary"
+            icon={generating ? <LoadingOutlined /> : <ThunderboltOutlined />}
+            onClick={handleGenerate}
+            loading={generating}
+            size="large"
+            style={{ borderRadius: 8 }}
+          >
+            生成日报
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading} size="large" style={{ borderRadius: 8 }}>
+            刷新
+          </Button>
+        </Space>
+      </div>
+
+      {/* 列表区域 */}
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>
+      ) : data.length === 0 ? (
+        <Empty
+          description={
+            <span>暂无日报，点击上方<Text strong>「生成日报」</Text>按钮创建</span>
+          }
+          style={{ padding: 80 }}
+        >
+          <Button type="primary" icon={<ThunderboltOutlined />} onClick={handleGenerate} loading={generating}>
+            立即生成
+          </Button>
+        </Empty>
+      ) : (
+        <Row gutter={[16, 16]}>
+          {data.map((record: any) => {
+            const stats = parseStats(record.content);
+
+            return (
+              <Col key={record.id} xs={24} sm={24} md={12} lg={8}>
+                <Card
+                  hoverable
+                  style={{
+                    borderRadius: 12,
+                    border: '1px solid #E8E8E8',
+                    height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                  }}
+                  styles={{
+                    body: {
+                      padding: 20,
+                      flex: 1,
+                      display: 'flex',
+                      flexDirection: 'column',
+                    },
+                  }}
+                >
+                  {/* 卡片头部 */}
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <Text strong style={{ fontSize: 16 }}>{record.title || '招聘日报'}</Text>
+                      <Tag color="blue" style={{ borderRadius: 4 }}>
+                        {{
+                          progress: '招聘进展',
+                          interview_stats: '面试统计',
+                          leader_summary: '负责人汇总',
+                        }[record.report_type] || record.report_type}
+                      </Tag>
+                    </div>
+                    <Space size={12}>
+                      <Space size={4}>
+                        <ClockCircleOutlined style={{ color: '#999', fontSize: 12 }} />
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          {record.report_date} · {record.created_at ? dayjs(record.created_at).format('HH:mm') : '-'}
+                        </Text>
+                      </Space>
+                    </Space>
+                  </div>
+
+                  {/* 关键指标 */}
+                  {stats && (
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(3, 1fr)',
+                      gap: 8,
+                      marginBottom: 12,
+                      padding: 12,
+                      background: '#F9FAFB',
+                      borderRadius: 8,
+                    }}>
+                      {[
+                        { label: '待筛选', value: stats.pending_screening, color: '#1677ff' },
+                        { label: '面试中', value: stats.active_interviews, color: '#722ed1' },
+                        { label: '已通过', value: stats.approved_candidates, color: '#52c41a' },
+                        { label: '入职中', value: stats.onboarding_count, color: '#13c2c2' },
+                        { label: '简历库', value: stats.total_resumes, color: '#fa8c16' },
+                        { label: '开放需求', value: stats.open_requisitions, color: '#eb2f96' },
+                      ].map(item => (
+                        <div key={item.label} style={{ textAlign: 'center' }}>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: item.color, lineHeight: 1.3 }}>
+                            {item.value ?? '-'}
+                          </div>
+                          <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 2 }}>{item.label}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* AI 摘要预览 */}
+                  {record.stats ? (
+                    <div style={{ flex: 1, marginBottom: 12 }}>
+                      <Space style={{ marginBottom: 4 }}>
+                        <RobotOutlined style={{ color: '#1677ff' }} />
+                        <Text type="secondary" style={{ fontSize: 12 }}>AI 摘要</Text>
+                      </Space>
+                      <div style={{
+                        fontSize: 13,
+                        lineHeight: 1.7,
+                        color: '#434343',
+                        background: '#F0F5FF',
+                        padding: '8px 12px',
+                        borderRadius: 6,
+                        maxHeight: 120,
+                        overflow: 'hidden',
+                      }}>
+                        {summaryPreview(record.stats)}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ flex: 1 }} />
+                  )}
+
+                  {/* 底部操作按钮 */}
+                  <Divider style={{ margin: '8px 0' }} />
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                    <Tooltip title="发送到飞书">
+                      <Button
+                        size="small"
+                        icon={<SendOutlined />}
+                        onClick={(e) => { e.stopPropagation(); handleOpenSend(record); }}
+                      >
+                        抄送飞书
+                      </Button>
+                    </Tooltip>
+                    <Tooltip title="查看完整日报">
+                      <Button
+                        size="small"
+                        icon={<FileTextOutlined />}
+                        onClick={() => {
+                          Modal.info({
+                            title: record.title || '日报详情',
+                            width: 700,
+                            content: (
+                              <div>
+                                <Row gutter={16} style={{ marginBottom: 16, marginTop: 16 }}>
+                                  <Col span={8}>
+                                    <Text type="secondary">报告日期: </Text>
+                                    <Text strong>{record.report_date}</Text>
+                                  </Col>
+                                  <Col span={8}>
+                                    <Text type="secondary">类型: </Text>
+                                    <Text strong>{record.report_type}</Text>
+                                  </Col>
+                                  <Col span={8}>
+                                    <Text type="secondary">生成时间: </Text>
+                                    <Text strong>{record.created_at ? dayjs(record.created_at).format('MM-DD HH:mm') : '-'}</Text>
+                                  </Col>
+                                </Row>
+                                {stats && (
+                                  <>
+                                    <Divider>统计数据</Divider>
+                                    <Row gutter={16}>
+                                      {Object.entries(stats).map(([key, val]: [string, any]) => (
+                                        <Col key={key} span={6} style={{ marginBottom: 12 }}>
+                                          <Statistic
+                                            title={key.replace(/_/g, ' ')}
+                                            value={val}
+                                            valueStyle={{ fontSize: 16 }}
+                                          />
+                                        </Col>
+                                      ))}
+                                    </Row>
+                                  </>
+                                )}
+                                <Divider>
+                                  <Space><RobotOutlined /> AI 摘要</Space>
+                                </Divider>
+                                {record.stats ? (
+                                  <pre style={{
+                                    whiteSpace: 'pre-wrap',
+                                    wordBreak: 'break-word',
+                                    background: '#f5f5f5',
+                                    padding: 16,
+                                    borderRadius: 8,
+                                    fontSize: 13,
+                                    lineHeight: 1.8,
+                                  }}>
+                                    {record.stats}
+                                  </pre>
+                                ) : (
+                                  <Text type="secondary">无AI摘要</Text>
+                                )}
+                              </div>
+                            ),
+                            okText: '关闭',
+                          });
+                        }}
+                      >
+                        查看详情
+                      </Button>
+                    </Tooltip>
+                    <Tooltip title="删除">
+                      <Button
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        onClick={(e) => { e.stopPropagation(); handleDelete(record.id); }}
+                      />
+                    </Tooltip>
+                  </div>
+                </Card>
+              </Col>
+            );
+          })}
+        </Row>
+      )}
+
+      {/* 发送到飞书对话框 */}
+      <Modal
+        title={
           <Space>
-            <DatePicker
-              value={selectedDate}
-              onChange={(d) => d && setSelectedDate(d)}
-              allowClear={false}
-            />
-            <Button
-              type="primary"
-              icon={generating ? <LoadingOutlined /> : <ThunderboltOutlined />}
-              onClick={handleGenerate}
-              loading={generating}
-            >
-              生成日报
-            </Button>
-            <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>刷新</Button>
+            <SendOutlined />
+            <span>抄送飞书</span>
           </Space>
         }
+        open={!!sendModal}
+        onCancel={() => setSendModal(null)}
+        onOk={handleSend}
+        confirmLoading={sending}
+        okText="发送"
+        cancelText="取消"
       >
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: 60 }}><Spin size="large" /></div>
-        ) : data.length === 0 ? (
-          <Empty description={`暂无日报，点击"生成日报"按钮创建`} />
-        ) : (
-          <Table
-            columns={columns}
-            dataSource={data}
-            rowKey="id"
-            pagination={{ pageSize: 10 }}
-          />
-        )}
-      </Card>
-
-      <Modal
-        title={detailModal?.title || '日报详情'}
-        open={!!detailModal}
-        onCancel={() => setDetailModal(null)}
-        footer={null}
-        width={800}
-      >
-        {detailModal && (
+        {sendModal && (
           <div>
-            <Row gutter={16} style={{ marginBottom: 16 }}>
-              <Col span={8}>
-                <Text type="secondary">报告日期: </Text>
-                <Text strong>{detailModal.report_date}</Text>
-              </Col>
-              <Col span={8}>
-                <Text type="secondary">类型: </Text>
-                <Text strong>{detailModal.report_type}</Text>
-              </Col>
-              <Col span={8}>
-                <Text type="secondary">生成时间: </Text>
-                <Text strong>{detailModal.created_at ? dayjs(detailModal.created_at).format('MM-DD HH:mm') : '-'}</Text>
-              </Col>
-            </Row>
-            <Divider>统计数据</Divider>
-            {detailModal.content && renderStats(detailModal.content)}
-            <Divider>
-              <Space><RobotOutlined /> AI摘要</Space>
-            </Divider>
-            {detailModal.stats ? (
-              <pre style={{
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                background: '#f5f5f5',
-                padding: 16,
-                borderRadius: 8,
-                fontSize: 13,
-                lineHeight: 1.8,
-              }}>
-                {detailModal.stats}
-              </pre>
-            ) : (
-              <Text type="secondary">无AI摘要</Text>
-            )}
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16, borderRadius: 6 }}
+              message={`发送日报：${sendModal.title || sendModal.report_date}`}
+            />
+
+            <div style={{ marginBottom: 16 }}>
+              <Text strong>发送目标</Text>
+            </div>
+
+            <Space direction="vertical" style={{ width: '100%' }}>
+              <Select
+                value={sendTargetType}
+                onChange={(v) => setSendTargetType(v)}
+                style={{ width: '100%' }}
+                options={[
+                  { value: 'chat', label: <><TeamOutlined /> 飞书群聊</> },
+                  { value: 'user', label: <><UserOutlined /> 飞书用户</> },
+                ]}
+              />
+
+              <Input
+                placeholder={sendTargetType === 'chat' ? '请输入飞书群 Chat ID' : '请输入用户 Open ID'}
+                value={sendTargetId}
+                onChange={(e) => setSendTargetId(e.target.value)}
+              />
+
+              <div style={{ fontSize: 12, color: '#999', lineHeight: 1.6 }}>
+                {sendTargetType === 'chat' ? (
+                  <>Chat ID 可在飞书开放平台查看，或联系管理员获取。</>
+                ) : (
+                  <>Open ID 是用户在飞书的唯一标识，可在飞书开放平台查看。</>
+                )}
+              </div>
+            </Space>
           </div>
         )}
       </Modal>

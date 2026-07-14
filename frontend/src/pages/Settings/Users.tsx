@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Button, Space, message, Tag, Modal, Form, Input, Select, Card, Typography, Popconfirm, Tooltip } from 'antd';
-import { PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, StopOutlined, CheckCircleOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, EditOutlined, DeleteOutlined, StopOutlined, CheckCircleOutlined, KeyOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
+import { useAuth } from '../../contexts/AuthContext';
 
 const { Title, Text } = Typography;
 
@@ -11,10 +12,14 @@ interface User {
   full_name: string;
   role: string;
   is_active: boolean;
+  has_password: boolean;
   created_at: string;
+  feishu_token?: string;
 }
 
 const UsersList: React.FC = () => {
+  const { user } = useAuth();
+  const role = (user as any)?.role?.value ?? (user as any)?.role;
   const [data, setData] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -23,6 +28,7 @@ const UsersList: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm();
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [createdPassword, setCreatedPassword] = useState<string>('');
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -53,6 +59,7 @@ const UsersList: React.FC = () => {
     form.setFieldsValue({
       full_name: record.full_name,
       role: record.role,
+      feishu_token: record.feishu_token || '',
     });
     setIsModalVisible(true);
   };
@@ -63,19 +70,28 @@ const UsersList: React.FC = () => {
       setSubmitting(true);
 
       if (isEditModal && editingUser) {
-        // 更新用户基本信息
-        await request.put(`/auth/users/${editingUser.id}`, {
-          full_name: values.full_name,
-        });
-        // 更新角色
-        if (values.role !== editingUser.role) {
-          await request.put(`/auth/users/${editingUser.id}/role?role=${values.role}`);
+        const payload: any = { full_name: values.full_name };
+        if (values.password) payload.password = values.password;
+        if (values.role !== editingUser.role) payload.role = values.role;
+        if (values.feishu_token) payload.feishu_token = values.feishu_token;
+        await request.put(`/auth/users/${editingUser.id}`, payload);
+        if (values.password) {
+          message.success(`用户已更新，新密码: ${values.password}（请告知用户自行修改）`);
+        } else {
+          message.success('用户更新成功');
         }
-        message.success('用户更新成功');
       } else {
-        // 创建新用户
-        await request.post('/auth/users', values);
-        message.success('创建用户成功');
+        const res = await request.post('/auth/users', values);
+        const plainPwd = (res as any)._plain_password || values.password;
+        message.success(`用户创建成功！\n登录密码: ${plainPwd}\n请复制后告知用户`);
+        // 在弹窗里显示密码（不关闭弹窗也能看到）
+        setCreatedPassword(plainPwd);
+        fetchUsers();
+        // 延迟关闭，给用户时间复制密码
+        setTimeout(() => {
+          setIsModalVisible(false);
+          setCreatedPassword('');
+        }, 5000);
       }
 
       setIsModalVisible(false);
@@ -107,6 +123,42 @@ const UsersList: React.FC = () => {
     } catch (error: any) {
       const errorMsg = error?.response?.data?.detail || '删除失败';
       message.error(errorMsg);
+    }
+  };
+
+  const handleResetPassword = async (record: User) => {
+    try {
+      const res = await request.put(`/auth/users/${record.id}/password`, {});
+      const newPwd = (res as any)._plain_password;
+      Modal.success({
+        title: '密码已重置',
+        content: (
+          <div>
+            <p>用户 <b>{record.full_name}</b> 的新密码：</p>
+            <div
+              style={{
+                background: '#f5f5f5',
+                border: '1px solid #d9d9d9',
+                borderRadius: 6,
+                padding: '8px 12px',
+                fontFamily: 'monospace',
+                fontSize: 16,
+                fontWeight: 'bold',
+                textAlign: 'center',
+                margin: '12px 0',
+                userSelect: 'all',
+              }}
+            >
+              {newPwd}
+            </div>
+            <p style={{ color: '#999', fontSize: 12 }}>请复制并告知用户</p>
+          </div>
+        ),
+        okText: '已复制，关闭',
+      });
+      fetchUsers();
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || '重置密码失败');
     }
   };
 
@@ -148,6 +200,27 @@ const UsersList: React.FC = () => {
     { title: '姓名', dataIndex: 'full_name', key: 'full_name', width: 150 },
     { title: '邮箱', dataIndex: 'email', key: 'email', width: 200 },
     {
+      title: '密码',
+      key: 'password',
+      width: 120,
+      render: (_: any, record: User) => (
+        <Space>
+          {record.has_password
+            ? <Tag color="green">已设置</Tag>
+            : <Tag color="orange">未设置</Tag>
+          }
+          <Tooltip title="重置密码">
+            <Button
+              type="link"
+              size="small"
+              icon={<KeyOutlined />}
+              onClick={() => handleResetPassword(record)}
+            />
+          </Tooltip>
+        </Space>
+      ),
+    },
+    {
       title: '角色',
       dataIndex: 'role',
       key: 'role',
@@ -162,6 +235,14 @@ const UsersList: React.FC = () => {
       render: (active: boolean) => (
         <Tag color={active ? 'success' : 'error'}>{active ? '启用' : '禁用'}</Tag>
       ),
+    },
+    {
+      title: '飞书 Token',
+      dataIndex: 'feishu_token',
+      key: 'feishu_token',
+      width: 200,
+      ellipsis: true,
+      render: (token: string) => token ? <Tooltip title={token}><Tag color="purple">已绑定</Tag></Tooltip> : <span style={{ color: '#bbb' }}>—</span>,
     },
     {
       title: '创建时间',
@@ -206,6 +287,14 @@ const UsersList: React.FC = () => {
       ),
     },
   ];
+
+  if (role !== 'admin') {
+    return (
+      <div style={{ padding: 40, textAlign: 'center' }}>
+        <Text type="secondary">仅管理员可查看用户管理</Text>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -256,9 +345,18 @@ const UsersList: React.FC = () => {
           <Form.Item name="full_name" label="姓名" rules={[{ required: true, message: '请输入姓名' }]}>
             <Input placeholder="请输入姓名" />
           </Form.Item>
-          {!isEditModal && (
-            <Form.Item name="password" label="密码" rules={[{ required: true, min: 6, message: '密码至少6位' }]}>
-              <Input.Password placeholder="请输入密码" />
+          {!isEditModal ? (
+            <Form.Item name="password" label="密码" rules={[
+              { required: true, message: '请输入密码' },
+              { min: 8, message: '密码至少8位' },
+              { pattern: /[A-Za-z]/, message: '密码必须包含字母' },
+              { pattern: /\d/, message: '密码必须包含数字' },
+            ]}>
+              <Input.Password placeholder="至少8位，含字母和数字" />
+            </Form.Item>
+          ) : (
+            <Form.Item name="password" label="重置密码（留空不修改）">
+              <Input.Password placeholder="输入新密码，留空则不修改" />
             </Form.Item>
           )}
           <Form.Item name="role" label="角色" initialValue="interviewer" rules={[{ required: true }]}>
@@ -267,6 +365,13 @@ const UsersList: React.FC = () => {
               <Select.Option value="hr">HR</Select.Option>
               <Select.Option value="interviewer">面试官 (Interviewer)</Select.Option>
             </Select>
+          </Form.Item>
+          <Form.Item
+            name="feishu_token"
+            label="飞书授权 Token"
+            help={isEditModal ? '更新 Token 后用户可继续使用飞书身份绑定功能' : '选填，用于飞书身份绑定'}
+          >
+            <Input placeholder="输入飞书 Open ID / Token，留空则不修改" />
           </Form.Item>
         </Form>
       </Modal>

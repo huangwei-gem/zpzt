@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { Table, Button, Space, message, Modal, Form, Input, Select, Tag, Tooltip, Typography, Drawer, Descriptions, Divider, Progress, Badge, Spin, Popconfirm } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, GlobalOutlined, StopOutlined, CopyOutlined, RobotOutlined, ThunderboltOutlined, DeleteFilled } from '@ant-design/icons';
+import React, { useEffect, useState, useMemo } from 'react';
+import { Table, Button, Space, message, Modal, Form, Input, Select, Tag, Tooltip, Typography, Drawer, Descriptions, Divider, Progress, Badge, Spin, Popconfirm, Alert } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, GlobalOutlined, StopOutlined, RobotOutlined, SyncOutlined, AppstoreOutlined, MinusCircleOutlined, RadarChartOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import JDGeneratorModal from '../../components/JDGeneratorModal';
 import ReactMarkdown from 'react-markdown';
@@ -39,6 +39,9 @@ interface Position {
   headcount: number;
   hiring_manager_id: string | null;
   hiring_manager_name: string | null;
+  responsible_person: string | null;
+  personalized_requirements: string | null;
+  capability_dimensions: string | null;
   created_at: string;
   updated_at: string;
   stats: PositionStats;
@@ -75,8 +78,85 @@ const PositionsList: React.FC = () => {
   const [aiMatchVisible, setAiMatchVisible] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
 
+  // 评估维度相关
+  const [dimModalVisible, setDimModalVisible] = useState(false);
+  const [dimPositionId, setDimPositionId] = useState<string | null>(null);
+  const [dimPositionName, setDimPositionName] = useState('');
+  const [dimLoading, setDimLoading] = useState(false);
+  const [dimForm] = Form.useForm();
+  const [dimensionsMap, setDimensionsMap] = useState<Record<string, any>>({}); // position_name → record
+  const [allDimNames, setAllDimNames] = useState<string[]>([]);
+
   const [searchTitle, setSearchTitle] = useState<string>('');
   const [searchStatus, setSearchStatus] = useState<string | undefined>(undefined);
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [deduping, setDeduping] = useState(false);
+
+  // 检测重复岗位
+  const duplicateGroups = useMemo(() => {
+    const map = new Map<string, Position[]>();
+    data.forEach(item => {
+      if (!map.has(item.title)) map.set(item.title, []);
+      map.get(item.title)!.push(item);
+    });
+    return Array.from(map.entries()).filter(([_, items]) => items.length > 1);
+  }, [data]);
+
+  // 一键去重：保留创建时间最早的，删除其余
+  const handleDedup = async () => {
+    setDeduping(true);
+    try {
+      const toDelete: string[] = [];
+      const toKeep: string[] = [];
+      duplicateGroups.forEach(([title, items]) => {
+        // 按创建时间排序，保留最早的
+        const sorted = [...items].sort((a, b) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+        toKeep.push(sorted[0].id);
+        sorted.slice(1).forEach(item => toDelete.push(item.id));
+      });
+      await Modal.confirm({
+        title: `确认去重`,
+        content: `将删除 ${toDelete.length} 条重复岗位记录，保留最早的 ${toKeep.length} 条。`,
+        okText: '确认去重',
+        cancelText: '取消',
+        okType: 'danger',
+      });
+      // 逐个删除重复项
+      let deleted = 0;
+      for (const id of toDelete) {
+        try {
+          await request.delete(`/positions/${id}`);
+          deleted++;
+        } catch { /* 跳过删除失败的 */ }
+      }
+      message.success(`去重完成：删除了 ${deleted} 条重复记录`);
+      fetchPositions();
+    } catch (e: any) {
+      if (e?.errorFields) return; // Modal 取消
+      message.error('去重失败');
+    } finally {
+      setDeduping(false);
+    }
+  };
+
+  const handleSyncFromFeishu = async () => {
+    setSyncLoading(true);
+    try {
+      const res = await request.post('/positions/sync-from-feishu') as any;
+      if (res.ok) {
+        message.success(res.message);
+        fetchPositions();
+      } else {
+        message.error(res.detail || '同步失败');
+      }
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || '同步失败，请检查网络');
+    } finally {
+      setSyncLoading(false);
+    }
+  };
 
   const fetchPositions = async () => {
     setLoading(true);
@@ -107,7 +187,31 @@ const PositionsList: React.FC = () => {
   useEffect(() => {
     fetchPositions();
     fetchUsers();
+    fetchDimensionsMap();
+    fetchAllDimNames();
   }, [searchTitle, searchStatus]);
+
+  const fetchAllDimNames = async () => {
+    try {
+      const res = await request.get('/capability-dimension-names');
+      if (Array.isArray(res)) setAllDimNames(res);
+    } catch { /* 静默 */ }
+  };
+
+  const fetchDimensionsMap = async () => {
+    try {
+      const res = await request.get('/capability-dimensions', { params: { page_size: 200 } });
+      const map: Record<string, any> = {};
+      if (Array.isArray(res)) {
+        res.forEach((item: any) => {
+          map[item.position_name] = item;
+        });
+      }
+      setDimensionsMap(map);
+    } catch {
+      // 静默失败
+    }
+  };
 
   const handleAIMatch = async (record: Position) => {
     setAiMatchingId(record.id);
@@ -133,7 +237,18 @@ const PositionsList: React.FC = () => {
     setEditingId(record.id);
     try {
       const res = await request.get(`/positions/${record.id}`);
-      form.setFieldsValue(res);
+      const formVals: any = { ...res };
+      // 能力维度 JSON 字符串 → 多选数组
+      if (res.capability_dimensions) {
+        try {
+          formVals.capability_dimensions = JSON.parse(res.capability_dimensions);
+        } catch {
+          formVals.capability_dimensions = [];
+        }
+      } else {
+        formVals.capability_dimensions = [];
+      }
+      form.setFieldsValue(formVals);
       setIsModalVisible(true);
     } catch (error) {
       message.error('获取岗位详情失败');
@@ -251,6 +366,87 @@ const PositionsList: React.FC = () => {
     }
   };
 
+  // === 评估维度相关函数 ===
+  /** 解析 full_text 为维度数组 */
+  const parseFullText = (fullText: string): { name: string; definition: string; behavior: string }[] => {
+    if (!fullText) return [];
+    const parts = fullText.split(/\d+\.\s*-\s*/).filter(Boolean);
+    return parts.map((part) => {
+      const lines = part.trim().split('\n');
+      const name = lines[0]?.replace(/^- /, '').trim() || '';
+      const definition = lines.find(l => l.includes('简要定义'))?.replace(/^- 简要定义[：:]\s*/, '').trim() || '';
+      const behavior = lines.find(l => l.includes('典型行为表现'))?.replace(/^- 典型行为表现[：:]\s*/, '').trim() || '';
+      return { name, definition, behavior };
+    }).filter(d => d.name);
+  };
+
+  /** 合并维度数组为 full_text */
+  const buildFullText = (dims: { name: string; definition: string; behavior: string }[]): string => {
+    return dims.map((d, i) => {
+      let text = `${i + 1}. - ${d.name}`;
+      if (d.definition) text += `\n- 简要定义：${d.definition}`;
+      if (d.behavior) text += `\n- 典型行为表现：${d.behavior}`;
+      return text;
+    }).join('\n');
+  };
+
+  /** 打开维度编辑弹窗 */
+  const handleOpenDimensions = async (record: Position) => {
+    setDimPositionId(record.id);
+    setDimPositionName(record.title);
+    setDimLoading(true);
+    setDimModalVisible(true);
+    try {
+      // 查询该岗位已有的能力维度配置
+      const res = await request.get('/capability-dimensions', { params: { position_name: record.title } });
+      const existingRecord = Array.isArray(res) && res.length > 0 ? res[0] : null;
+      if (existingRecord) {
+        const dims = existingRecord.dimensions_json
+          ? JSON.parse(existingRecord.dimensions_json)
+          : parseFullText(existingRecord.full_text || '');
+        dimForm.setFieldsValue({
+          dimensions: dims.length > 0 ? dims : [{ name: '', definition: '', behavior: '' }],
+        });
+      } else {
+        dimForm.setFieldsValue({ dimensions: [{ name: '', definition: '', behavior: '' }] });
+      }
+    } catch {
+      dimForm.setFieldsValue({ dimensions: [{ name: '', definition: '', behavior: '' }] });
+    } finally {
+      setDimLoading(false);
+    }
+  };
+
+  /** 保存维度 */
+  const handleSaveDimensions = async () => {
+    try {
+      const values = await dimForm.validateFields();
+      const dims = (values.dimensions || []).filter((d: any) => d.name);
+      const fullText = buildFullText(dims);
+      const payload = {
+        position_name: dimPositionName,
+        dimensions_json: JSON.stringify(dims),
+        full_text: fullText,
+      };
+
+      // 检查是否已有记录（通过查询现有记录确定是新增还是更新）
+      const res = await request.get('/capability-dimensions', { params: { position_name: dimPositionName } });
+      const existingRecord = Array.isArray(res) && res.length > 0 ? res[0] : null;
+
+      if (existingRecord) {
+        await request.put(`/capability-dimensions/${existingRecord.id}`, payload);
+        message.success('维度更新成功');
+      } else {
+        await request.post('/capability-dimensions', payload);
+        message.success('维度创建成功');
+      }
+      setDimModalVisible(false);
+    } catch (e: any) {
+      if (e.errorFields) return;
+      message.error(e.response?.data?.detail || '操作失败');
+    }
+  };
+
   const handleOpenJDModal = async () => {
     try {
       const values = await form.validateFields(['title']);
@@ -275,11 +471,16 @@ const PositionsList: React.FC = () => {
     try {
       const values = await form.validateFields();
       setSubmitting(true);
+      // 能力维度数组 → JSON 字符串
+      const payload = { ...values };
+      if (payload.capability_dimensions) {
+        payload.capability_dimensions = JSON.stringify(payload.capability_dimensions);
+      }
       if (editingId) {
-        await request.put(`/positions/${editingId}`, values);
+        await request.put(`/positions/${editingId}`, payload);
         message.success('更新成功');
       } else {
-        await request.post('/positions', values);
+        await request.post('/positions', payload);
         message.success('创建成功');
       }
       setIsModalVisible(false);
@@ -370,6 +571,56 @@ const PositionsList: React.FC = () => {
       render: (_: any, record: Position) => renderStats(record.stats)
     },
     { 
+      title: '责任人', 
+      dataIndex: 'responsible_person', 
+      key: 'responsible_person',
+      render: (v: string) => v || <Text type="secondary">-</Text>
+    },
+    {
+      title: '能力维度',
+      key: 'dimensions',
+      width: 220,
+      render: (_: any, record: Position) => {
+        // 优先读岗位自身的 capability_dimensions
+        let dimNames: string[] = [];
+        if (record.capability_dimensions) {
+          try { dimNames = JSON.parse(record.capability_dimensions); } catch {}
+        }
+        // 兜底：从 dimensionsMap 取
+        if (dimNames.length === 0) {
+          const dimRecord = dimensionsMap[record.title];
+          if (dimRecord) {
+            let dims: any[] = [];
+            try {
+              dims = dimRecord.dimensions_json
+                ? JSON.parse(dimRecord.dimensions_json)
+                : parseFullText(dimRecord.full_text || '');
+            } catch {}
+            dimNames = dims.map((d: any) => d.name).filter(Boolean);
+          }
+        }
+        if (dimNames.length === 0) return <Text type="secondary" style={{ cursor: 'pointer', fontSize: 12 }}>暂无</Text>;
+        const showCount = Math.min(dimNames.length, 6);
+        const extra = dimNames.length - showCount;
+        return (
+          <div style={{ lineHeight: '22px', overflow: 'hidden' }}>
+            {dimNames.slice(0, showCount).map((name: string, i: number) => (
+              <Tag key={i} color="blue" style={{ margin: '1px 2px', fontSize: 11, lineHeight: '18px' }}>{name}</Tag>
+            ))}
+            {extra > 0 && <Tag style={{ margin: '1px 2px', fontSize: 11, lineHeight: '18px' }}>+{extra}</Tag>}
+          </div>
+        );
+      }
+    },
+    { 
+      title: '个性化需求', 
+      dataIndex: 'personalized_requirements', 
+      key: 'personalized_requirements',
+      width: 200,
+      ellipsis: true,
+      render: (v: string) => v || <Text type="secondary">-</Text>
+    },
+    { 
       title: '创建时间', 
       dataIndex: 'created_at', 
       key: 'created_at',
@@ -378,31 +629,22 @@ const PositionsList: React.FC = () => {
     {
       title: '操作',
       key: 'action',
+      width: 120,
+      fixed: 'right' as const,
       render: (_: any, record: Position) => (
         <Space size="small">
-          <Tooltip title="查看详情">
-            <Button type="text" icon={<EyeOutlined style={{ color: '#3B82F6' }} />} onClick={() => handleView(record)} />
-          <Tooltip title="AI候选人匹配">
-            <Button type="text" icon={<ThunderboltOutlined style={{ color: '#8B5CF6' }} />} loading={aiMatchingId === record.id} onClick={() => handleAIMatch(record)} />
-          </Tooltip>
-          </Tooltip>
-          {record.status === 'published' ? (
-             <Tooltip title="下架岗位">
-                <Button type="text" icon={<StopOutlined style={{ color: '#EF4444' }} />} onClick={() => handlePublish(record.id, false)} />
-             </Tooltip>
-          ) : (
-             <Tooltip title="发布岗位">
-                <Button type="text" icon={<GlobalOutlined style={{ color: '#10B981' }} />} onClick={() => handlePublish(record.id, true)} />
-             </Tooltip>
-          )}
-          {record.status === 'published' && (
-             <Tooltip title="复制链接">
-                <Button type="text" icon={<CopyOutlined />} onClick={() => handleCopyLink(record.id)} />
-             </Tooltip>
-          )}
           <Tooltip title="编辑">
             <Button type="text" icon={<EditOutlined style={{ color: '#64748B' }} />} onClick={() => handleEdit(record)} />
           </Tooltip>
+          {record.status === 'published' ? (
+             <Tooltip title="下架">
+                <Button type="text" icon={<StopOutlined style={{ color: '#EF4444' }} />} onClick={() => handlePublish(record.id, false)} />
+             </Tooltip>
+          ) : (
+             <Tooltip title="发布">
+                <Button type="text" icon={<GlobalOutlined style={{ color: '#10B981' }} />} onClick={() => handlePublish(record.id, true)} />
+             </Tooltip>
+          )}
           <Tooltip title="删除">
             <Button type="text" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)} />
           </Tooltip>
@@ -418,8 +660,28 @@ const PositionsList: React.FC = () => {
           <Title level={2} style={{ margin: 0, fontWeight: 700 }}>岗位管理</Title>
           <Text type="secondary">管理企业的招聘岗位信息</Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} size="large" style={{ borderRadius: '8px' }}>新增岗位</Button>
+        <Space>
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} size="large" style={{ borderRadius: '8px' }}>新增岗位</Button>
+          <Button icon={<SyncOutlined />} loading={syncLoading} onClick={handleSyncFromFeishu} size="large" style={{ borderRadius: '8px' }}>从飞书同步</Button>
+        </Space>
       </div>
+
+      {/* 重复岗位提醒 */}
+      {duplicateGroups.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16, borderRadius: 8 }}
+          message={
+            <Space>
+              <span>检测到 <strong>{duplicateGroups.length}</strong> 个岗位名称存在重复记录（共 <strong>{duplicateGroups.reduce((sum, [_, items]) => sum + items.length, 0)}</strong> 条）</span>
+              <Button size="small" danger icon={<MergeCellsOutlined />} loading={deduping} onClick={handleDedup}>
+                一键去重（保留最早创建）
+              </Button>
+            </Space>
+          }
+        />
+      )}
       
       <div style={{ marginBottom: 24, padding: '24px', background: '#fff', borderRadius: '12px', border: '1px solid #E2E8F0', display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
           <Input 
@@ -455,6 +717,7 @@ const PositionsList: React.FC = () => {
         dataSource={data} 
         loading={loading} 
         rowKey="id" 
+        scroll={{ x: 1300 }}
         pagination={{ pageSize: 10, showSizeChanger: true }}
         rowSelection={{
           selectedRowKeys,
@@ -468,7 +731,7 @@ const PositionsList: React.FC = () => {
         onOk={handleOk}
         onCancel={() => setIsModalVisible(false)}
         confirmLoading={submitting}
-        width={800}
+        width={880}
         centered
         destroyOnClose
         okText="保存"
@@ -488,42 +751,25 @@ const PositionsList: React.FC = () => {
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            <Form.Item
-              name="department"
-              label="所属部门"
-            >
+            <Form.Item name="department" label="所属部门">
               <Input placeholder="例如：研发部" size="large" />
             </Form.Item>
-
-            <Form.Item
-              name="location"
-              label="工作地点"
-            >
+            <Form.Item name="location" label="工作地点">
               <Input placeholder="例如：北京" size="large" />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            <Form.Item
-              name="salary_range"
-              label="薪资范围"
-            >
+            <Form.Item name="salary_range" label="薪资范围">
               <Input placeholder="例如：20k-30k" size="large" />
             </Form.Item>
-
-            <Form.Item
-              name="headcount"
-              label="招聘人数"
-            >
+            <Form.Item name="headcount" label="招聘人数">
               <Input type="number" min={1} placeholder="1" size="large" />
             </Form.Item>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            <Form.Item
-              name="position_type"
-              label="岗位类型"
-            >
+            <Form.Item name="position_type" label="岗位类型">
               <Select size="large">
                 <Select.Option value="full_time">全职</Select.Option>
                 <Select.Option value="part_time">兼职</Select.Option>
@@ -531,11 +777,7 @@ const PositionsList: React.FC = () => {
                 <Select.Option value="internship">实习</Select.Option>
               </Select>
             </Form.Item>
-
-            <Form.Item
-              name="urgency"
-              label="紧急程度"
-            >
+            <Form.Item name="urgency" label="紧急程度">
               <Select size="large">
                 <Select.Option value="low">低</Select.Option>
                 <Select.Option value="medium">中</Select.Option>
@@ -546,48 +788,62 @@ const PositionsList: React.FC = () => {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            <Form.Item
-              name="hiring_manager_id"
-              label="招聘负责人"
-            >
+            <Form.Item name="hiring_manager_id" label="招聘负责人">
               <Select size="large" allowClear placeholder="选择招聘负责人" showSearch optionFilterProp="children">
                 {users.map(user => (
                   <Select.Option key={user.id} value={user.id}>{user.full_name} ({user.email})</Select.Option>
                 ))}
               </Select>
             </Form.Item>
-
- 
+            <Form.Item name="responsible_person" label="责任人">
+              <Input placeholder="从飞书同步或手动填写" size="large" />
+            </Form.Item>
           </div>
+
+          {/* 能力维度 — 多选 */}
+          <Form.Item
+            name="capability_dimensions"
+            label={
+              <Space>
+                <RadarChartOutlined />
+                <span>能力维度（可多选）</span>
+              </Space>
+            }
+            extra="如需新维度，请先在「设置 → 能力维度配置」中添加"
+          >
+            <Select
+              mode="multiple"
+              size="large"
+              placeholder="选择能力维度，支持搜索"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+            >
+              {allDimNames.map(name => (
+                <Select.Option key={name} value={name} label={name}>{name}</Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <Text strong>岗位职责</Text>
-            <Button 
-              type="link" 
-              icon={<RobotOutlined />} 
-              onClick={handleOpenJDModal}
-            >
+            <Button type="link" icon={<RobotOutlined />} onClick={handleOpenJDModal}>
               AI 生成 JD
             </Button>
           </div>
-          <Form.Item
-            name="description"
-            rules={[{ required: true, message: '请输入岗位职责' }]}
-          >
+          <Form.Item name="description" rules={[{ required: true, message: '请输入岗位职责' }]}>
             <Input.TextArea rows={4} placeholder="请输入详细的岗位职责描述" showCount maxLength={2000} style={{ padding: '8px 12px' }} />
           </Form.Item>
 
-          <Form.Item
-            name="requirements"
-            label="任职要求"
-          >
+          <Form.Item name="requirements" label="任职要求">
             <Input.TextArea rows={4} placeholder="请输入任职资格要求" showCount maxLength={2000} style={{ padding: '8px 12px' }} />
           </Form.Item>
 
-          <Form.Item
-            name="status"
-            label="状态"
-          >
+          <Form.Item name="personalized_requirements" label="个性化需求">
+            <Input.TextArea rows={3} placeholder="如特殊语言要求、特定行业经验等" style={{ padding: '8px 12px' }} />
+          </Form.Item>
+
+          <Form.Item name="status" label="状态">
             <Select size="large">
               <Select.Option value="open">待发布</Select.Option>
               <Select.Option value="published">招聘中</Select.Option>
@@ -617,6 +873,96 @@ const PositionsList: React.FC = () => {
         location={form.getFieldValue('location')}
         salary_range={form.getFieldValue('salary_range')}
       />
+
+      {/* 评估维度编辑弹窗 */}
+      <Modal
+        title={
+          <Space>
+            <RadarChartOutlined />
+            <span>评估维度配置 — {dimPositionName}</span>
+          </Space>
+        }
+        open={dimModalVisible}
+        onCancel={() => setDimModalVisible(false)}
+        onOk={handleSaveDimensions}
+        width={800}
+        centered
+        destroyOnClose
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={dimLoading}
+      >
+        <Form form={dimForm} layout="vertical" preserve={false}>
+          <div style={{ marginBottom: 8 }}>
+            <Text strong style={{ fontSize: 14 }}>
+              <AppstoreOutlined style={{ marginRight: 6 }} />
+              能力维度要求
+            </Text>
+            <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+              添加该岗位需要考察的各个能力维度
+            </Text>
+          </div>
+          <Form.List name="dimensions">
+            {(fields, { add, remove }) => (
+              <>
+                {fields.map(({ key, name, ...restField }, index) => (
+                  <div
+                    key={key}
+                    style={{
+                      padding: '16px',
+                      marginBottom: 16,
+                      border: '1px solid #E2E8F0',
+                      borderRadius: 8,
+                      background: '#FAFBFC',
+                      position: 'relative'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+                      <Tag color="blue" style={{ marginRight: 8 }}>维度 {index + 1}</Tag>
+                      {fields.length > 1 && (
+                        <Button
+                          type="text"
+                          danger
+                          icon={<MinusCircleOutlined />}
+                          onClick={() => remove(name)}
+                          style={{ position: 'absolute', right: 8, top: 8 }}
+                        />
+                      )}
+                    </div>
+                    <Form.Item
+                      {...restField}
+                      name={[name, 'name']}
+                      label="维度名称"
+                      rules={[{ required: true, message: '请输入维度名称' }]}
+                    >
+                      <Input placeholder="例：市场洞察能力" />
+                    </Form.Item>
+                    <Form.Item
+                      {...restField}
+                      name={[name, 'definition']}
+                      label="简要定义"
+                    >
+                      <Input.TextArea rows={2} placeholder="该维度的简要定义" showCount maxLength={500} />
+                    </Form.Item>
+                    <Form.Item
+                      {...restField}
+                      name={[name, 'behavior']}
+                      label="典型行为表现"
+                    >
+                      <Input.TextArea rows={2} placeholder="描述典型的行为表现" showCount maxLength={500} />
+                    </Form.Item>
+                  </div>
+                ))}
+                {fields.length < 10 && (
+                  <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
+                    添加维度
+                  </Button>
+                )}
+              </>
+            )}
+          </Form.List>
+        </Form>
+      </Modal>
 
       <Drawer
         title="岗位详情"
@@ -659,6 +1005,7 @@ const PositionsList: React.FC = () => {
               <Descriptions.Item label="薪资范围">{viewingRecord.salary_range || '-'}</Descriptions.Item>
               <Descriptions.Item label="招聘人数">{viewingRecord.headcount || 1} 人</Descriptions.Item>
               <Descriptions.Item label="招聘负责人">{viewingRecord.hiring_manager_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="责任人">{viewingRecord.responsible_person || '-'}</Descriptions.Item>
             </Descriptions>
 
             <Divider style={{ margin: '24px 0' }} />
@@ -714,6 +1061,19 @@ const PositionsList: React.FC = () => {
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {viewingRecord.requirements || '暂无要求'}
                 </ReactMarkdown>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 24 }}>
+              <Title level={5} style={{ marginBottom: 12 }}>个性化需求</Title>
+              <div style={{ 
+                background: '#F8FAFC', 
+                padding: '16px', 
+                borderRadius: '8px', 
+                color: '#334155',
+                lineHeight: 1.8
+              }}>
+                {viewingRecord.personalized_requirements || '暂无'}
               </div>
             </div>
 

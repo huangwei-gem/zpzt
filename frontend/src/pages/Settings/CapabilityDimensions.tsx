@@ -1,15 +1,22 @@
-﻿import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
-  Card, Table, Button, Space, Modal, Form, Input, message,
-  Typography, Popconfirm
+  Card, Table, Button, Space, Modal, Form, Input, Tag, message,
+  Typography, Popconfirm, Tooltip
 } from 'antd';
 import {
-  PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined
+  PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
+  MinusCircleOutlined, AppstoreOutlined, UserOutlined
 } from '@ant-design/icons';
 import request from '../../utils/request';
 
-const { Text } = Typography;
+const { Text, Title } = Typography;
 const { TextArea } = Input;
+
+interface Dimension {
+  name: string;
+  definition: string;
+  behavior: string;
+}
 
 const CapabilityDimensions: React.FC = () => {
   const [data, setData] = useState<any[]>([]);
@@ -35,26 +42,68 @@ const CapabilityDimensions: React.FC = () => {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  /** 解析已有的 full_text 为 dimensions 数组 */
+  const parseFullText = (fullText: string): Dimension[] => {
+    if (!fullText) return [];
+    // 按 "数字. - " 分割
+    const parts = fullText.split(/\d+\.\s*-\s*/).filter(Boolean);
+    return parts.map((part) => {
+      const lines = part.trim().split('\n');
+      const name = lines[0]?.replace(/^- /, '').trim() || '';
+      const definition = lines.find(l => l.includes('简要定义'))?.replace(/^- 简要定义[：:]\s*/, '').trim() || '';
+      const behavior = lines.find(l => l.includes('典型行为表现'))?.replace(/^- 典型行为表现[：:]\s*/, '').trim() || '';
+      return { name, definition, behavior };
+    }).filter(d => d.name);
+  };
+
+  /** 合并 dimensions 为 full_text */
+  const buildFullText = (dims: Dimension[]): string => {
+    return dims.map((d, i) => {
+      let text = `${i + 1}. - ${d.name}`;
+      if (d.definition) text += `\n- 简要定义：${d.definition}`;
+      if (d.behavior) text += `\n- 典型行为表现：${d.behavior}`;
+      return text;
+    }).join('\n');
+  };
+
   const handleCreate = () => {
     setEditing(null);
     form.resetFields();
+    form.setFieldsValue({ dimensions: [{ name: '', definition: '', behavior: '' }] });
     setModalVisible(true);
   };
 
   const handleEdit = (record: any) => {
     setEditing(record);
-    form.setFieldsValue(record);
+    const dims = record.dimensions_json
+      ? JSON.parse(record.dimensions_json)
+      : parseFullText(record.full_text || '');
+    form.setFieldsValue({
+      position_name: record.position_name,
+      dimensions: dims.length > 0 ? dims : [{ name: '', definition: '', behavior: '' }],
+      personalized_requirements: record.personalized_requirements || '',
+    });
     setModalVisible(true);
   };
 
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
+      const dims: Dimension[] = (values.dimensions || []).filter((d: Dimension) => d.name);
+      const fullText = buildFullText(dims);
+
+      const payload = {
+        position_name: values.position_name,
+        dimensions_json: JSON.stringify(dims),
+        personalized_requirements: values.personalized_requirements || '',
+        full_text: fullText,
+      };
+
       if (editing) {
-        await request.put(`/capability-dimensions/${editing.id}`, values);
+        await request.put(`/capability-dimensions/${editing.id}`, payload);
         message.success('更新成功');
       } else {
-        await request.post('/capability-dimensions', values);
+        await request.post('/capability-dimensions', payload);
         message.success('创建成功');
       }
       setModalVisible(false);
@@ -75,28 +124,98 @@ const CapabilityDimensions: React.FC = () => {
     }
   };
 
+  /** 获取某个记录的 dimensions 数组 */
+  const getDimensions = (record: any): Dimension[] => {
+    if (record.dimensions_json) {
+      try { return JSON.parse(record.dimensions_json); } catch { }
+    }
+    return parseFullText(record.full_text || '');
+  };
+
   const columns = [
-    { title: '岗位名称', dataIndex: 'position_name', key: 'position_name', width: 200 },
     {
-      title: '能力维度要求',
-      dataIndex: 'full_text',
-      key: 'full_text',
-      ellipsis: true,
+      title: '岗位名称',
+      dataIndex: 'position_name',
+      key: 'position_name',
+      width: 180,
+      fixed: 'left' as const,
       render: (v: string) => (
-        <Text style={{ fontSize: 12 }} ellipsis={{ tooltip: v }}>
-          {v ? v.substring(0, 80) + '...' : '-'}
-        </Text>
+        <Space>
+          <AppstoreOutlined style={{ color: '#1890ff' }} />
+          <Text strong>{v}</Text>
+        </Space>
       ),
+    },
+    {
+      title: '能力维度',
+      key: 'dimensions',
+      width: 360,
+      render: (_: any, record: any) => {
+        const dims = getDimensions(record);
+        return (
+          <div style={{ maxWidth: 340 }}>
+            <Space wrap size={[4, 4]}>
+              {dims.length > 0 ? dims.map((d, i) => (
+                <Tooltip key={i} title={
+                  <div style={{ whiteSpace: 'pre-wrap' }}>
+                    <div><strong>{d.name}</strong></div>
+                    {d.definition && <div style={{ marginTop: 4 }}>📌 {d.definition}</div>}
+                    {d.behavior && <div style={{ marginTop: 4 }}>🎯 {d.behavior}</div>}
+                  </div>
+                }>
+                  <Tag color="blue" style={{ cursor: 'pointer', margin: 2, maxWidth: 320 }}>
+                    {d.name}
+                  </Tag>
+                </Tooltip>
+              )) : <Text type="secondary">-</Text>}
+            </Space>
+          </div>
+        );
+      },
+    },
+    {
+      title: '个性化需求',
+      key: 'personalized_requirements',
+      width: 240,
+      ellipsis: true,
+      render: (_: any, record: any) => {
+        const text = record.personalized_requirements || '';
+        if (!text) return <Text type="secondary">-</Text>;
+        return (
+          <Tooltip
+            title={<div style={{ whiteSpace: 'pre-wrap', maxWidth: 400 }}>{text}</div>}
+            overlayStyle={{ maxWidth: 450 }}
+          >
+            <div
+              style={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                cursor: 'pointer',
+                fontSize: 13,
+                color: '#fa8c16',
+              }}
+            >
+              🏷️ {text}
+            </div>
+          </Tooltip>
+        );
+      },
     },
     {
       title: '操作',
       key: 'action',
-      width: 120,
+      width: 100,
+      fixed: 'right' as const,
       render: (_: any, record: any) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
+          <Tooltip title="编辑">
+            <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
+          </Tooltip>
           <Popconfirm title="确认删除?" onConfirm={() => handleDelete(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
+            <Tooltip title="删除">
+              <Button size="small" danger icon={<DeleteOutlined />} />
+            </Tooltip>
           </Popconfirm>
         </Space>
       ),
@@ -104,47 +223,155 @@ const CapabilityDimensions: React.FC = () => {
   ];
 
   return (
-    <Card
-      title="能力维度管理"
-      extra={
-        <Space>
+    <div style={{ padding: 24 }}>
+      <Card
+        title={
+          <Space>
+            <AppstoreOutlined />
+            <span>能力维度管理</span>
+          </Space>
+        }
+        extra={
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>
+              刷新
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+              新增
+            </Button>
+          </Space>
+        }
+        style={{ borderRadius: 8, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}
+      >
+        <div style={{ marginBottom: 16 }}>
           <Input.Search
-            placeholder="搜索岗位名称"
+            placeholder="搜索岗位名称…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onSearch={fetchData}
-            style={{ width: 200 }}
+            onChange={e => setSearch(e.target.value)}
+            onSearch={() => fetchData()}
             allowClear
+            onClear={() => { setSearch(''); fetchData(); }}
+            style={{ width: 300 }}
           />
-          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>新增</Button>
-        </Space>
-      }
-    >
-      <Table
-        columns={columns}
-        dataSource={data}
-        rowKey="id"
-        loading={loading}
-        pagination={{ pageSize: 15 }}
-      />
+          <Text type="secondary" style={{ marginLeft: 12, fontSize: 12 }}>
+            共 {data.length} 个岗位配置
+          </Text>
+        </div>
+
+        <Table
+          dataSource={data}
+          columns={columns}
+          rowKey="id"
+          loading={loading}
+          scroll={{ x: 880 }}
+          pagination={{
+            pageSize: 20,
+            showSizeChanger: false,
+            showTotal: (total) => `共 ${total} 条`,
+          }}
+        />
+      </Card>
+
       <Modal
         title={editing ? '编辑能力维度' : '新增能力维度'}
         open={modalVisible}
-        onOk={handleSubmit}
         onCancel={() => setModalVisible(false)}
-        width={600}
+        onOk={handleSubmit}
+        width={800}
+        destroyOnClose
       >
-        <Form form={form} layout="vertical">
-          <Form.Item name="position_name" label="岗位名称" rules={[{ required: true, message: '请输入' }]}>
-            <Input placeholder="如：大客户经理" />
+        <Form form={form} layout="vertical" preserve={false}>
+          <Form.Item
+            name="position_name"
+            label="岗位名称"
+            rules={[{ required: true, message: '请输入岗位名称' }]}
+          >
+            <Input placeholder="例：大客户经理" />
           </Form.Item>
-          <Form.Item name="full_text" label="能力维度要求" rules={[{ required: true, message: '请输入' }]}>
-            <TextArea rows={8} placeholder="完整的能力维度描述文本..." />
+
+          <div style={{ marginBottom: 8 }}>
+            <Text strong style={{ fontSize: 14 }}>
+              <AppstoreOutlined style={{ marginRight: 6 }} />
+              能力维度要求
+            </Text>
+            <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+              添加该岗位需要考察的各个能力维度
+            </Text>
+          </div>
+
+          <Form.List name="dimensions">
+            {(fields, { add, remove }) => (
+              <div style={{ background: '#fafafa', padding: 16, borderRadius: 8, marginBottom: 16 }}>
+                {fields.map(({ key, name, ...restField }) => (
+                  <Card
+                    key={key}
+                    size="small"
+                    style={{ marginBottom: 12, background: '#fff' }}
+                    type="inner"
+                    title={`维度 ${name + 1}`}
+                    extra={
+                      fields.length > 1 && (
+                        <Button
+                          type="text"
+                          danger
+                          icon={<MinusCircleOutlined />}
+                          onClick={() => remove(name)}
+                        >
+                          删除
+                        </Button>
+                      )
+                    }
+                  >
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                      <Form.Item
+                        {...restField}
+                        name={[name, 'name']}
+                        label="维度名称"
+                        rules={[{ required: true, message: '请输入维度名称' }]}
+                      >
+                        <Input placeholder="例：市场洞察能力" />
+                      </Form.Item>
+                      <Form.Item
+                        {...restField}
+                        name={[name, 'definition']}
+                        label="简要定义"
+                      >
+                        <TextArea rows={2} placeholder="该维度的简要定义说明…" />
+                      </Form.Item>
+                      <Form.Item
+                        {...restField}
+                        name={[name, 'behavior']}
+                        label="典型行为表现"
+                      >
+                        <TextArea rows={2} placeholder="该维度的典型行为表现…" />
+                      </Form.Item>
+                    </Space>
+                  </Card>
+                ))}
+                <Button type="dashed" onClick={() => add({ name: '', definition: '', behavior: '' })} block>
+                  + 添加维度
+                </Button>
+              </div>
+            )}
+          </Form.List>
+
+          <Form.Item
+            name="personalized_requirements"
+            label={
+              <Space>
+                <UserOutlined />
+                <span>个性化需求</span>
+              </Space>
+            }
+          >
+            <TextArea
+              rows={3}
+              placeholder="该岗位的个性化要求，如：需要有大客户资源、要求英语口语流利…"
+            />
           </Form.Item>
         </Form>
       </Modal>
-    </Card>
+    </div>
   );
 };
 

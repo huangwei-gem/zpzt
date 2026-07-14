@@ -7,9 +7,10 @@ compatibility_date = "2024-12-01"
 #   SECRET_KEY, FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_BITABLE_APP_TOKEN
 #   FEISHU_REQUISITION_TABLE_ID, FEISHU_POSITION_TABLE_ID
 
-# AI 配置（如不设置则降级使用 Cloudflare Workers AI）
-# AI_API_KEY = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-# AI_BASE_URL = "https://api.deepseek.com"
+# AI 配置（通过 `npx wrangler secret put` 设置）
+#   AI_API_KEY — DeepSeek / 兼容 OpenAI API 的密钥
+#   AI_BASE_URL — API 地址，默认 https://api.deepseek.com
+# ✅ 已通过 wrangler secret 设置（DeepSeek）
 
 [[d1_databases]]
 binding = "DB"

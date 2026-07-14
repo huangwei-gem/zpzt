@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Card, Divider, Form, Input, Space, Typography, message } from 'antd';
+import { Button, Card, Divider, Form, Input, Space, Typography, message, Tag, Tooltip } from 'antd';
+import { CopyOutlined, KeyOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -11,6 +12,22 @@ const ProfileSettings: React.FC = () => {
   const [passwordForm] = Form.useForm();
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
+  const [feishuBinding, setFeishuBinding] = useState(false);
+  const [token, setToken] = useState<string>('');
+  const [tokenLoading, setTokenLoading] = useState(false);
+
+  // 检查 URL query 参数（来自飞书 OAuth 回调）
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('feishu_bound') === '1') {
+      message.success('飞书身份绑定成功');
+      refreshUser();
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (params.get('feishu_error') === '1') {
+      message.error('飞书身份绑定失败，请重试');
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, [refreshUser]);
 
   useEffect(() => {
     if (!user) return;
@@ -20,6 +37,48 @@ const ProfileSettings: React.FC = () => {
       full_name: user.full_name,
     });
   }, [user, profileForm]);
+
+  const fetchToken = async () => {
+    setTokenLoading(true);
+    try {
+      const res = await request.get('/auth/me/token');
+      setToken((res as any).token);
+    } catch {
+      // ignore
+    } finally {
+      setTokenLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchToken();
+  }, []);
+
+  const copyToken = () => {
+    if (!token) return;
+    navigator.clipboard.writeText(token).then(() => {
+      message.success('Token 已复制到剪贴板');
+    }).catch(() => {
+      // 降级：让用户手动选择
+      message.info('请手动复制');
+    });
+  };
+
+  const bindFeishu = async () => {
+    setFeishuBinding(true);
+    try {
+      const res = await request.get('/auth/feishu-oauth-url') as any;
+      if (res.url) {
+        window.location.href = res.url;
+      } else {
+        message.error('获取授权链接失败');
+      }
+    } catch {
+      message.error('获取授权链接失败');
+    } finally {
+      setFeishuBinding(false);
+    }
+  };
 
   const saveProfile = async () => {
     try {
@@ -75,6 +134,14 @@ const ProfileSettings: React.FC = () => {
             >
               <Input placeholder="请输入姓名" />
             </Form.Item>
+            <Form.Item label="飞书身份">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <Text>{(user as any)?.feishu_name ? `已绑定: ${(user as any).feishu_name}` : '未绑定'}</Text>
+                <Button onClick={bindFeishu} loading={feishuBinding} size="small">
+                  绑定飞书
+                </Button>
+              </div>
+            </Form.Item>
             <Button type="primary" onClick={saveProfile} loading={savingProfile}>
               保存
             </Button>
@@ -118,6 +185,47 @@ const ProfileSettings: React.FC = () => {
               更新密码
             </Button>
           </Form>
+        </Card>
+
+        <Card
+          title={<span><KeyOutlined /> 登录 Token</span>}
+          styles={{ body: { paddingTop: 8 } }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Text style={{ fontSize: 12, color: '#999', display: 'block', marginBottom: 8 }}>
+                此 Token 用于 API 调用身份验证，请勿泄露给他人
+              </Text>
+              <div
+                style={{
+                  background: '#f5f5f5',
+                  border: '1px solid #d9d9d9',
+                  borderRadius: 6,
+                  padding: '8px 12px',
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  wordBreak: 'break-all',
+                  maxHeight: 120,
+                  overflow: 'auto',
+                }}
+              >
+                {token}
+              </div>
+            </div>
+            <Button
+              icon={<CopyOutlined />}
+              onClick={copyToken}
+              loading={tokenLoading}
+              style={{ flexShrink: 0, marginTop: 26 }}
+            >
+              复制
+            </Button>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <Text style={{ fontSize: 12, color: '#999' }}>
+              Token 有效期为 30 天，过期后重新登录将自动获取新的 Token
+            </Text>
+          </div>
         </Card>
       </Space>
     </div>

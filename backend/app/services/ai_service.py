@@ -77,26 +77,40 @@ def analyze_resume(resume_text: str, position_description: str, other_positions:
         print("Failed to load prompt for analyze_resume")
         return {}
 
-    try:
-        cfg = _get_llm_config()
-        extra = {"temperature": cfg["llm_temperature"]}
-        if cfg["llm_max_tokens"] is not None:
-            extra["max_tokens"] = cfg["llm_max_tokens"]
-        completion = _get_client().chat.completions.create(
-            model=cfg["llm_model"],
-            messages=[
-                {'role': 'system', 'content': prompt_data['system']},
-                {'role': 'user', 'content': prompt_data['user']}
-            ],
-            response_format={"type": "json_object"},
-            extra_body=_get_extra_body(),
-            **extra,
-        )
-        result = json.loads(completion.choices[0].message.content)
-        return result
-    except Exception as e:
-        print(f"AI analysis failed: {e}")
-        return {}
+    cfg = _get_llm_config()
+
+    # 自动重试：最多3次，指数退避
+    import time
+    max_retries = 3
+    last_error = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            extra = {"temperature": cfg["llm_temperature"]}
+            if cfg["llm_max_tokens"] is not None:
+                extra["max_tokens"] = cfg["llm_max_tokens"]
+            completion = _get_client().chat.completions.create(
+                model=cfg["llm_model"],
+                messages=[
+                    {'role': 'system', 'content': prompt_data['system']},
+                    {'role': 'user', 'content': prompt_data['user']}
+                ],
+                response_format={"type": "json_object"},
+                extra_body=_get_extra_body(),
+                **extra,
+            )
+            result = json.loads(completion.choices[0].message.content)
+            return result
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                wait = attempt * 2  # 2s, 4s, 6s
+                print(f"AI analysis attempt {attempt}/{max_retries} failed: {e}, retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                print(f"AI analysis failed after {max_retries} attempts: {e}")
+
+    return {}
 
 def generate_resume_markdown(resume_text: str) -> str:
     prompt_data = prompt_manager.get_prompt(
@@ -107,27 +121,32 @@ def generate_resume_markdown(resume_text: str) -> str:
     if not prompt_data.get("user"):
         return resume_text
         
-    try:
-        cfg = _get_llm_config()
-        extra = {"temperature": cfg["llm_temperature"]}
-        if cfg["llm_max_tokens"] is not None:
-            extra["max_tokens"] = cfg["llm_max_tokens"]
-        completion = _get_client().chat.completions.create(
-            model=cfg["llm_model"],
-            messages=[
-                {'role': 'system', 'content': prompt_data['system']},
-                {'role': 'user', 'content': prompt_data['user']}
-            ],
-            extra_body=_get_extra_body(),
-            **extra,
-        )
-        content = completion.choices[0].message.content
-        # Remove potential markdown code block markers
-        content = content.replace("```markdown", "").replace("```", "").strip()
-        return content
-    except Exception as e:
-        print(f"Markdown generation failed: {e}")
-        return resume_text
+    import time
+    max_retries = 3
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            extra = {"temperature": cfg["llm_temperature"]}
+            if cfg["llm_max_tokens"] is not None:
+                extra["max_tokens"] = cfg["llm_max_tokens"]
+            completion = _get_client().chat.completions.create(
+                model=cfg["llm_model"],
+                messages=[
+                    {'role': 'system', 'content': prompt_data['system']},
+                    {'role': 'user', 'content': prompt_data['user']}
+                ],
+                extra_body=_get_extra_body(),
+                **extra,
+            )
+            content = completion.choices[0].message.content
+            # Remove potential markdown code block markers
+            content = content.replace("```markdown", "").replace("```", "").strip()
+            return content
+        except Exception as e:
+            print(f"Markdown generation attempt {attempt}/{max_retries} failed: {e}")
+            if attempt < max_retries:
+                time.sleep(attempt * 2)
+    return resume_text
 
 def generate_interview_questions(
     resume_data: Dict,

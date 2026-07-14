@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   full_name TEXT,
   role TEXT DEFAULT 'hr',
   is_active INTEGER DEFAULT 1,
+  feishu_token TEXT DEFAULT '',
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -27,6 +28,9 @@ CREATE TABLE IF NOT EXISTS positions (
   position_type TEXT DEFAULT 'full_time',
   headcount INTEGER DEFAULT 1,
   hiring_manager_id TEXT,
+  responsible_person TEXT DEFAULT '',
+  personalized_requirements TEXT DEFAULT '',
+  capability_dimensions TEXT DEFAULT '[]',
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Form, Input, Button, Card, message, Select, Typography } from 'antd';
+import { Form, Input, Button, Card, message, Select, Typography, Tag } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import { RobotOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
@@ -14,17 +14,23 @@ const PositionForm: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [users, setUsers] = useState<any[]>([]);
   const [jdModalVisible, setJdModalVisible] = useState(false);
+  const [allDimensionNames, setAllDimensionNames] = useState<string[]>([]);
 
   useEffect(() => {
     if (id) {
       fetchPosition(id);
     }
     fetchUsers();
+    fetchDimensionNames();
   }, [id]);
 
   const fetchPosition = async (positionId: string) => {
     try {
       const res = await request.get(`/positions/${positionId}`);
+      // 解析 capability_dimensions JSON 字符串为数组
+      if (typeof res.capability_dimensions === 'string') {
+        try { res.capability_dimensions = JSON.parse(res.capability_dimensions); } catch { res.capability_dimensions = []; }
+      }
       form.setFieldsValue(res);
     } catch (error) {
       message.error('获取岗位详情失败');
@@ -37,6 +43,15 @@ const PositionForm: React.FC = () => {
       setUsers(res);
     } catch (error) {
       console.error('Failed to fetch users');
+    }
+  };
+
+  const fetchDimensionNames = async () => {
+    try {
+      const res = await request.get('/capability-dimension-names');
+      setAllDimensionNames(Array.isArray(res) ? res : []);
+    } catch {
+      // ignore
     }
   };
 
@@ -63,6 +78,10 @@ const PositionForm: React.FC = () => {
   const onFinish = async (values: any) => {
     setLoading(true);
     try {
+      // capability_dimensions 是数组，序列化为 JSON 字符串
+      if (Array.isArray(values.capability_dimensions)) {
+        values.capability_dimensions = JSON.stringify(values.capability_dimensions);
+      }
       if (id) {
         await request.put(`/positions/${id}`, values);
         message.success('更新成功');
@@ -209,6 +228,16 @@ const PositionForm: React.FC = () => {
               <Select.Option value="published">招聘中</Select.Option>
               <Select.Option value="closed">已关闭</Select.Option>
             </Select>
+          </Form.Item>
+
+          <Form.Item name="capability_dimensions" label="能力维度（多选）">
+            <Select
+              mode="multiple"
+              size="large"
+              placeholder="选择已有能力维度，或直接输入新维度名称"
+              tokenSeparators={[',']}
+              options={allDimensionNames.map(n => ({ label: n, value: n }))}
+            />
           </Form.Item>
 
           <Form.Item style={{ marginTop: 32 }}>

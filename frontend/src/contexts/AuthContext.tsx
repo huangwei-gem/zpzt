@@ -8,6 +8,8 @@ interface User {
   email: string;
   full_name: string;
   role: 'admin' | 'hr' | 'interviewer';
+  feishu_open_id?: string;
+  feishu_name?: string;
 }
 
 interface AuthContextType {

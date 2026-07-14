@@ -598,7 +598,7 @@ const ResumeDetail: React.FC = () => {
           </div>
 
           <Descriptions column={2} bordered size="small">
-            <Descriptions.Item label="应聘岗位">{resume.position?.title}</Descriptions.Item>
+            <Descriptions.Item label="应聘岗位">{resume.standard_position || resume.position?.title || resume.position_applied || '-'}</Descriptions.Item>
             <Descriptions.Item label="学历">{parsedData.highest_degree || '未识别'}</Descriptions.Item>
             <Descriptions.Item label="毕业院校">{parsedData.school || '未识别'}</Descriptions.Item>
             <Descriptions.Item label="专业">{parsedData.major || '未识别'}</Descriptions.Item>

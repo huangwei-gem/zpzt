@@ -16,6 +16,9 @@ class PositionBase(BaseModel):
     position_type: PositionType = PositionType.FULL_TIME
     headcount: int = 1
     hiring_manager_id: Optional[UUID] = None
+    responsible_person: Optional[str] = None
+    personalized_requirements: Optional[str] = None
+    capability_dimensions: Optional[str] = None
 
 class PositionCreate(PositionBase):
     pass
@@ -32,6 +35,9 @@ class PositionUpdate(BaseModel):
     position_type: Optional[PositionType] = None
     headcount: Optional[int] = None
     hiring_manager_id: Optional[UUID] = None
+    responsible_person: Optional[str] = None
+    personalized_requirements: Optional[str] = None
+    capability_dimensions: Optional[str] = None
 
 class PositionResponse(PositionBase):
     id: UUID

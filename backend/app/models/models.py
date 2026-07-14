@@ -55,6 +55,9 @@ class Position(Base):
     position_type = Column(Enum(PositionType), default=PositionType.FULL_TIME)
     headcount = Column(Integer, default=1)
     hiring_manager_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    responsible_person = Column(String, nullable=True)
+    personalized_requirements = Column(Text, nullable=True)
+    capability_dimensions = Column(Text, nullable=True, default='[]')
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

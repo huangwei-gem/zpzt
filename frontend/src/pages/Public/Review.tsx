@@ -20,6 +20,8 @@ interface ResumeData {
   ai_review: string;
   resume_markdown: string;
   parsed_data: any;
+  standard_position?: string;
+  position_applied?: string;
   position: {
     id: string;
     title: string;
@@ -137,7 +139,7 @@ const PublicReview: React.FC = () => {
 
         <Descriptions title="候选人信息" bordered column={2} style={{ marginBottom: 24 }}>
           <Descriptions.Item label="姓名">{resume.candidate_name}</Descriptions.Item>
-          <Descriptions.Item label="应聘岗位">{resume.position?.title}</Descriptions.Item>
+          <Descriptions.Item label="应聘岗位">{resume.standard_position || resume.position?.title || resume.position_applied || '-'}</Descriptions.Item>
           <Descriptions.Item label="邮箱">{resume.email}</Descriptions.Item>
           <Descriptions.Item label="联系电话">{resume.contact}</Descriptions.Item>
           <Descriptions.Item label="匹配度评分">

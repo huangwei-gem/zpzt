@@ -154,6 +154,28 @@ def reparse_resume_route(
         raise HTTPException(status_code=404, detail="Resume not found")
     return resume
 
+@router.post("/batch-reparse")
+def batch_reparse_resumes_route(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(check_roles([UserRole.ADMIN, UserRole.HR]))
+):
+    """批量重新解析所有状态为 failed 或 success 的简历"""
+    from app.models.models import Resume
+    resumes = db.query(Resume).filter(
+        Resume.parse_status.in_(["failed", "success"]),
+        Resume.position_id.isnot(None)
+    ).all()
+    count = len(resumes)
+    for r in resumes:
+        r.parse_status = "processing"
+        r.parse_error = None
+        r.parsed_at = None
+        db.commit()
+        from app.services.resume_service import process_resume_background
+        process_resume_background(r.id, r.position_id)
+    return {"success": True, "count": count, "message": f"已提交 {count} 个简历重新解析"}
+
 @router.get("/{resume_id}/file")
 def get_resume_file(
     resume_id: UUID,

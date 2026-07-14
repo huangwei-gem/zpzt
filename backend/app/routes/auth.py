@@ -185,6 +185,14 @@ def update_user(
     data = user_update.dict(exclude_unset=True)
     if "full_name" in data:
         db_user.full_name = data["full_name"]
+    if "password" in data and data["password"]:
+        from app.core.security import get_password_hash
+        validate_password_strength(data["password"])
+        db_user.hashed_password = get_password_hash(data["password"])
+    if "role" in data:
+        db_user.role = data["role"]
+    if "feishu_token" in data:
+        db_user.feishu_token = data["feishu_token"]
 
     db.add(db_user)
     db.commit()

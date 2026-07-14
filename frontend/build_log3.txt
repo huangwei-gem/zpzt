@@ -1,0 +1,57 @@
+
+> ai-interview-frontend@1.0.0 build
+> tsc -b && vite build && node ../scripts/build-worker.cjs
+
+[36mvite v7.3.1 [32mbuilding client environment for production...[36m[39m
+transforming...
+[32m✓[39m 3382 modules transformed.
+[33mnode_modules/pdfjs-dist/build/pdf.js (1982:23): Use of eval in "node_modules/pdfjs-dist/build/pdf.js" is strongly discouraged as it poses security risks and may cause issues with minification.[39m
+rendering chunks...
+computing gzip size...
+[2mdist/[22m[32mindex.html                               [39m[1m[2m    0.77 kB[22m[1m[22m[2m │ gzip:   0.50 kB[22m
+[2mdist/[22m[32massets/pdf.worker.min-DKQKFyKK.js        [39m[1m[2m1,087.21 kB[22m[1m[22m
+[2mdist/[22m[35massets/index-CJInPL9R.css                [39m[1m[2m    4.34 kB[22m[1m[22m[2m │ gzip:   1.35 kB[22m
+[2mdist/[22m[36massets/charts-stVx4n2K.js                [39m[1m[2m    0.03 kB[22m[1m[22m[2m │ gzip:   0.05 kB[22m
+[2mdist/[22m[36massets/pdfPreview-C2EIzsDz.js            [39m[1m[2m    0.27 kB[22m[1m[22m[2m │ gzip:   0.20 kB[22m
+[2mdist/[22m[36massets/Upload-dOkGqxMB.js                [39m[1m[2m    1.66 kB[22m[1m[22m[2m │ gzip:   0.98 kB[22m
+[2mdist/[22m[36massets/index-Dy4bgWxj.js                 [39m[1m[2m    1.88 kB[22m[1m[22m[2m │ gzip:   1.09 kB[22m
+[2mdist/[22m[36massets/PdfViewer-DJxUw9ix.js             [39m[1m[2m    2.47 kB[22m[1m[22m[2m │ gzip:   1.37 kB[22m
+[2mdist/[22m[36massets/Profile-J_X8xk0W.js               [39m[1m[2m    2.51 kB[22m[1m[22m[2m │ gzip:   1.12 kB[22m
+[2mdist/[22m[36massets/List-CkzP2msf.js                  [39m[1m[2m    3.46 kB[22m[1m[22m[2m │ gzip:   1.66 kB[22m
+[2mdist/[22m[36massets/Review-CBRxFE37.js                [39m[1m[2m    4.59 kB[22m[1m[22m[2m │ gzip:   1.86 kB[22m
+[2mdist/[22m[36massets/JobDetail-ErNbMj80.js             [39m[1m[2m    4.61 kB[22m[1m[22m[2m │ gzip:   2.03 kB[22m
+[2mdist/[22m[36massets/Form-BRPPAw00.js                  [39m[1m[2m    4.69 kB[22m[1m[22m[2m │ gzip:   1.87 kB[22m
+[2mdist/[22m[36massets/index-JiYWoG6T.js                 [39m[1m[2m    4.94 kB[22m[1m[22m[2m │ gzip:   2.23 kB[22m
+[2mdist/[22m[36massets/PositionMappings-B0-9W2ti.js      [39m[1m[2m    4.96 kB[22m[1m[22m[2m │ gzip:   2.29 kB[22m
+[2mdist/[22m[36massets/Users-B1zbx79E.js                 [39m[1m[2m    5.02 kB[22m[1m[22m[2m │ gzip:   2.25 kB[22m
+[2mdist/[22m[36massets/CapabilityDimensions-D5enb2rA.js  [39m[1m[2m    6.69 kB[22m[1m[22m[2m │ gzip:   2.77 kB[22m
+[2mdist/[22m[36massets/List-fxAvo9p6.js                  [39m[1m[2m    6.72 kB[22m[1m[22m[2m │ gzip:   2.58 kB[22m
+[2mdist/[22m[36massets/List-D-Ttr7G6.js                  [39m[1m[2m    7.64 kB[22m[1m[22m[2m │ gzip:   2.58 kB[22m
+[2mdist/[22m[36massets/List-C0HJoOFq.js                  [39m[1m[2m    8.69 kB[22m[1m[22m[2m │ gzip:   2.96 kB[22m
+[2mdist/[22m[36massets/List-Dw_ACMCr.js                  [39m[1m[2m   10.04 kB[22m[1m[22m[2m │ gzip:   3.54 kB[22m
+[2mdist/[22m[36massets/System-BwfwETfg.js                [39m[1m[2m   14.45 kB[22m[1m[22m[2m │ gzip:   4.72 kB[22m
+[2mdist/[22m[36massets/List-B4gCnanN.js                  [39m[1m[2m   18.02 kB[22m[1m[22m[2m │ gzip:   5.32 kB[22m
+[2mdist/[22m[36massets/Detail-Ba9TZ25U.js                [39m[1m[2m   23.60 kB[22m[1m[22m[2m │ gzip:   7.04 kB[22m
+[2mdist/[22m[36massets/Score-ByMTOI04.js                 [39m[1m[2m   25.68 kB[22m[1m[22m[2m │ gzip:   8.16 kB[22m
+[2mdist/[22m[36massets/List-DlRIVOKD.js                  [39m[1m[2m   36.58 kB[22m[1m[22m[2m │ gzip:  11.28 kB[22m
+[2mdist/[22m[36massets/index-1SLNtoxp.js                 [39m[1m[2m   58.60 kB[22m[1m[22m[2m │ gzip:  22.12 kB[22m
+[2mdist/[22m[36massets/index-BfoJ3-U-.js                 [39m[1m[2m  156.64 kB[22m[1m[22m[2m │ gzip:  47.42 kB[22m
+[2mdist/[22m[36massets/pdf-B6GYUv7-.js                   [39m[1m[2m  310.04 kB[22m[1m[22m[2m │ gzip:  91.43 kB[22m
+[2mdist/[22m[36massets/xlsx-CNerDvZX.js                  [39m[1m[2m  429.19 kB[22m[1m[22m[2m │ gzip: 142.94 kB[22m
+[2mdist/[22m[36massets/Result-DiRi8LlS.js                [39m[1m[33m  985.11 kB[39m[22m[2m │ gzip: 284.28 kB[22m
+[2mdist/[22m[36massets/vendor-C_X0pLBD.js                [39m[1m[33m1,492.51 kB[39m[22m[2m │ gzip: 460.36 kB[22m
+[33m
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+[32m✓ built in 32.57s[39m
+[build-worker] 开始编译 _worker.js...
+  源文件: C:\Users\35796\.qwenpaw\workspaces\dvS2cn\ai-interview\worker\src\index.ts
+  输出:   C:\Users\35796\.qwenpaw\workspaces\dvS2cn\ai-interview\frontend\dist\_worker.js
+  esbuild: "C:\Users\35796\.qwenpaw\workspaces\dvS2cn\ai-interview\worker\node_modules\.bin\esbuild"
+
+  frontend\dist\_worker.js  140.7kb
+
+Done in 72ms
+[build-worker] ✅ _worker.js 编译成功

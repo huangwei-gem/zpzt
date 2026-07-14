@@ -1,15 +1,14 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { Table, Button, Space, message, Tag, Modal, Tooltip, Typography, Form, Select, Upload, Input, DatePicker, InputNumber, Card, Row, Col, Checkbox } from 'antd';
-import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, DownloadOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, SolutionOutlined, SyncOutlined, FileTextOutlined, CheckOutlined, CloseOutlined } from '@ant-design/icons';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
+import { Table, Button, Space, message, Tag, Modal, Tooltip, Typography, Form, Select, Upload, Input, DatePicker, InputNumber, Card, Row, Col, Checkbox, Statistic, Pagination, Empty, Avatar, Badge, Popover } from 'antd';
+import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, DownloadOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, SolutionOutlined, SyncOutlined, FileTextOutlined, CheckOutlined, CloseOutlined, UserOutlined, StarOutlined, StarFilled, EnvironmentOutlined, BookOutlined, InfoCircleOutlined, EditOutlined, SettingOutlined, RobotOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
 
 // PdfViewer 只在使用时动态加载（参见 renderPreviewModal）
 let PdfViewer: any = null;
 
 const { Title, Text } = Typography;
-
-import { useAuth } from '../../contexts/AuthContext';
 
 const ResumesList: React.FC = () => {
   const { user } = useAuth();
@@ -42,12 +41,197 @@ const ResumesList: React.FC = () => {
 
   const [searchName, setSearchName] = useState('');
   const [searchStatus, setSearchStatus] = useState<string | undefined>(undefined);
+  const [searchPosition, setSearchPosition] = useState<string | undefined>(undefined);
   const [previewVisible, setPreviewVisible] = useState(false);
   const [previewRecord, setPreviewRecord] = useState<any>(null);
   const [previewPdfUrl, setPreviewPdfUrl] = useState<string>('');
   // 前端缓存，切页面回来不重新拉飞书
   const dataCache = useRef<any[]>([]);
   const loadedRef = useRef(false);
+
+  // 统计卡片（基于筛选后的 data 实时计算）
+  const statsOffer = useMemo(() => data.filter((r: any) => r.status === 'offer_pending' || r.status === 'offer_accepted' || r.status === 'offer_rejected').length, [data]);
+  const statsPendingOnboard = useMemo(() => data.filter((r: any) => r.status === 'onboarding').length, [data]);
+  const statsCompletedOnboard = useMemo(() => data.filter((r: any) => r.status === 'completed' || r.status === 'offer_accepted').length, [data]);
+
+  // 能力维度（评估依据）
+  const [capDims, setCapDims] = useState<Record<string, any>>({});
+  const fetchCapDims = async () => {
+    try {
+      const res = await request.get('/capability-dimensions');
+      const map: Record<string, any> = {};
+      (res || []).forEach((item: any) => {
+        let dims: any[] = [];
+        if (item.dimensions_json) {
+          try { dims = JSON.parse(item.dimensions_json); } catch {}
+        }
+        map[item.position_name] = {
+          dims,
+          personalized: item.personalized_requirements || '',
+        };
+      });
+      setCapDims(map);
+    } catch {}
+  };
+
+  // BOSS 导入
+  const [bossImportOpen, setBossImportOpen] = useState(false);
+  const [bossPreview, setBossPreview] = useState<any[]>([]);
+  const [bossImporting, setBossImporting] = useState(false);
+  const [bossImportResult, setBossImportResult] = useState<any>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [evalDims, setEvalDims] = useState<any[]>([]);
+  const [dimModalOpen, setDimModalOpen] = useState(false);
+  const [dimForm] = Form.useForm();
+  const fetchEvalDims = async () => {
+    try {
+      const res = await request.get('/settings/evaluation-dimensions');
+      setEvalDims(Array.isArray(res) ? res : []);
+    } catch { /* ignore */ }
+  };
+  const handleSaveEvalDims = async () => {
+    try {
+      const values = await dimForm.validateFields();
+      const items = (values.dimensions || []).filter((d: any) => d.key && d.label);
+      if (items.length === 0) { message.warning('请至少添加一个维度'); return; }
+      await request.put('/settings/evaluation-dimensions', { items });
+      message.success('评估维度已更新，下次 AI 评估将使用新维度');
+      setDimModalOpen(false);
+      fetchEvalDims();
+    } catch (e: any) {
+      if (e.errorFields) return; // 表单验证错误
+      message.error('保存失败: ' + (e.message || e));
+    }
+  };
+
+  // BOSS 导入：选择文件并解析
+  const handleBossFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const XLSX = await import('xlsx');
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as any[];
+      if (json.length === 0) {
+        message.warning('未解析到数据，请检查文件格式');
+        return;
+      }
+
+      // 字段映射：匹配 BOSS 直聘导出的常见列名
+      const rows = json.map((row: any) => ({
+        name: row['姓名'] || row['名字'] || row['候选人'] || row['候选人姓名'] || '',
+        gender: row['性别'] || '',
+        age: row['年龄'] || '',
+        education: row['学历'] || row['最高学历'] || '',
+        school: row['学校'] || row['毕业院校'] || '',
+        major: row['专业'] || '',
+        work_years: row['工作经验'] || row['工作年限'] || '',
+        phone: row['手机号'] || row['手机号码'] || row['电话'] || '',
+        current_status: row['目前状态'] || row['求职状态'] || '',
+        expected_salary: row['期望薪资'] || row['薪资'] || '',
+        position_applied: row['应聘岗位'] || row['投递岗位'] || row['匹配职位'] || row['职位'] || '',
+        work_history: row['工作经历'] || row['工作经验详情'] || '',
+        project_experience: row['项目经验'] || '',
+        self_evaluation: row['自我评价'] || '',
+        skills: row['技能'] || row['技能标签'] || '',
+        advantage_summary: row['优势总结'] || row['亮点'] || '',
+        resume_summary: row['简历摘要'] || row['摘要'] || '',
+      })).filter((r: any) => r.name); // 跳过无姓名的行
+
+      if (rows.length === 0) {
+        message.warning('未找到有效的候选人数据，请检查列名是否匹配');
+        return;
+      }
+
+      setBossPreview(rows);
+      setBossImportResult(null);
+      message.success(`解析到 ${rows.length} 条候选人数据`);
+    } catch (err: any) {
+      message.error('文件解析失败: ' + (err.message || err));
+    }
+    // 重置 input 以便下次选同一文件
+    e.target.value = '';
+  };
+
+  // BOSS 导入：提交到后端
+  const handleBossImport = async () => {
+    if (bossPreview.length === 0) return;
+    setBossImporting(true);
+    try {
+      const res = await request.post('/resumes/import-boss', { items: bossPreview });
+      setBossImportResult(res);
+      message.success(`导入完成：成功 ${res.imported} 条，跳过 ${res.skipped} 条`);
+    } catch (err: any) {
+      message.error('导入失败: ' + (err.response?.data?.detail || err.message));
+    } finally {
+      setBossImporting(false);
+    }
+  };
+
+  const handleBatchAIEvaluate = async () => {
+    const hide = message.loading('正在批量AI评估简历...', 0);
+    try {
+      const res = await request.post('/resumes/batch-ai-evaluate');
+      hide();
+      message.success(`评估完成：成功 ${res.evaluated} 份，跳过 ${res.skipped} 份，失败 ${res.failed} 份`);
+      if (res.errors?.length > 0) {
+        console.warn('AI评估失败详情:', res.errors);
+      }
+      fetchResumes();
+    } catch (err: any) {
+      hide();
+      message.error('批量AI评估失败: ' + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  const handleBatchReparse = async () => {
+    Modal.confirm({
+      title: '批量重新解析所有简历',
+      content: '将通过 MinerU 重新解析所有简历的 PDF 文件，然后重新运行 AI 分析（评分+匹配）。\n\n此操作会覆盖现有解析结果。',
+      okText: '确认重解析',
+      cancelText: '取消',
+      okType: 'primary',
+      onOk: async () => {
+        const hide = message.loading('正在提交批量重新解析...', 0);
+        try {
+          const res = await request.post('/resumes/batch-reparse');
+          hide();
+          message.success(res.message || `已提交 ${res.count} 个简历重新解析`);
+          setTimeout(() => fetchResumes(), 3000);
+        } catch (error: any) {
+          hide();
+          message.error(error?.response?.data?.detail || '批量重新解析失败');
+        }
+      },
+    });
+  };
+
+  const handleAutoEvaluateAll = async () => {
+    Modal.confirm({
+      title: '自动AI评估',
+      content: '将对所有尚无评估的简历进行：\n1. 从PDF源文件提取简历文本\n2. AI根据评估维度评分\n3. 保存评估结果到页面显示\n\n已有评估的简历将被跳过。',
+      okText: '开始评估',
+      cancelText: '取消',
+      onOk: async () => {
+        const hide = message.loading('正在自动评估简历（从PDF提取文本 + AI评分）...', 0);
+        try {
+          const res = await request.post('/resumes/auto-evaluate-all', {});
+          hide();
+          message.success(`自动评估完成：成功 ${res.evaluated} 份，跳过 ${res.skipped} 份，失败 ${res.failed} 份`);
+          if (res.errors?.length > 0) {
+            console.warn('自动评估失败详情:', res.errors);
+            message.warning(`${res.failed} 份评估失败，查看控制台了解详情`);
+          }
+          fetchResumes();
+        } catch (err: any) {
+          hide();
+          message.error('自动评估失败: ' + (err.response?.data?.detail || err.message));
+        }
+      }
+    });
+  };
 
   const fetchResumes = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -62,20 +246,45 @@ const ResumesList: React.FC = () => {
       }
 
       // 没有筛选条件且有缓存时直接复用
-      if (!searchName && !searchStatus && loadedRef.current && dataCache.current.length > 0) {
+      if (!searchName && !searchStatus && !searchPosition && loadedRef.current && dataCache.current.length > 0) {
         setData(dataCache.current);
         if (!silent) setLoading(false);
         return;
       }
 
       const res = await request.get('/resumes', { params });
-      setData(res);
+      let filtered = res;
+      // 岗位筛选（客户端过滤，因为 API 不支持岗位参数）
+      if (searchPosition) {
+        filtered = res.filter((r: any) => r.mapped_position === searchPosition);
+      }
+      setData(filtered);
       dataCache.current = res;
       loadedRef.current = true;
+
+      // 后台触发 PDF 缓存（静默执行，不阻塞展示）
+      request.post('/resumes/cache-files').catch(() => {});
+
+      // 检查是否有需要自动评估的简历（无 ai_evaluation 且非仅飞书导入时触发）
+      const noEval = res.filter((r: any) => !r.ai_evaluation);
+      if (noEval.length > 0 && !silent) {
+        console.log(`[AutoEval] 发现 ${noEval.length} 份简历无评估，自动触发评估...`);
+        request.post('/resumes/auto-evaluate-all', {}).then((evalRes) => {
+          if (evalRes.evaluated > 0) {
+            message.success(`自动评估完成：成功 ${evalRes.evaluated} 份，跳过 ${evalRes.skipped} 份`);
+            // 重新加载数据
+            fetchResumes(true);
+          }
+        }).catch((err) => {
+          console.warn('[AutoEval] 自动评估失败:', err.message);
+        });
+      }
 
       // 检查是否有正在解析中的简历
       const hasProcessing = res.some((r: any) => r.parse_status === 'processing');
       setPollingEnabled(hasProcessing);
+
+      return res;
     } catch (error) {
       if (!silent) message.error('获取简历列表失败');
     } finally {
@@ -105,14 +314,17 @@ const ResumesList: React.FC = () => {
   }, [pollingEnabled]);
 
   const fetchPositions = async () => {
-    const cached = sessionStorage.getItem('_cached_positions');
-    if (cached) { try { setPositions(JSON.parse(cached)); return; } catch {} }
     try {
-      const res = await request.get('/positions');
-      sessionStorage.setItem('_cached_positions', JSON.stringify(res));
-      setPositions(res);
+      // 从岗位映射表获取标准岗位名列表（去重后）
+      const res = await request.get('/position-mappings');
+      if (res && res.length > 0) {
+        const unique = [...new Set(res.map((r: any) => r.mapped_name).filter(Boolean))] as string[];
+        setPositions(unique.sort().map((name: string) => ({ id: name, title: name })));
+      } else {
+        setPositions([]);
+      }
     } catch (error) {
-      console.error('获取岗位列表失败');
+      console.error('获取标准岗位列表失败');
     }
   };
 
@@ -142,20 +354,26 @@ const ResumesList: React.FC = () => {
     }
   };
 
+
   useEffect(() => {
     fetchResumes();
     fetchPositions();
     fetchQuestionBanks();
     fetchInterviewers();
+    fetchCapDims();
+    fetchEvalDims();
   }, []);
 
   const handleSearch = () => {
+    setCardPage(1);
     fetchResumes();
   };
 
   const handleReset = () => {
     setSearchName('');
     setSearchStatus(undefined);
+    setSearchPosition(undefined);
+    setCardPage(1);
     dataCache.current = [];
     loadedRef.current = false;
     setLoading(true);
@@ -560,217 +778,248 @@ const ResumesList: React.FC = () => {
     document.body.removeChild(a);
   };
 
-  const columns = [
-    { 
-      title: '候选人', 
-      dataIndex: 'candidate_name', 
-      key: 'candidate_name',
-      render: (text: string) => <span style={{ fontWeight: 500, color: '#0F172A' }}>{text || '解析中...'}</span>
-    },
-    { 
-      title: '应聘岗位', 
-      dataIndex: 'position_applied', 
-      key: 'position_applied',
-      render: (_: any, record: any) => {
-        const pd = record.parsed_data || {};
-        const mapped = record.position_mapped || record.mapped_position || pd.position || '';
-        const original = record.position_applied || record.position?.title || pd.position || '';
-        return mapped ? (
-          <Tooltip title={`原始: ${original || '-'}`}>
-            <Tag color="blue">{mapped}</Tag>
-          </Tooltip>
-        ) : (
-          <span>{original || '-'}</span>
-        );
-      }
-    },
-    { 
-      title: '优势分析', 
-      dataIndex: 'advantage',
-      key: 'advantage',
-      width: 160,
-      render: (_: any, record: any) => {
-        const adv = record.advantage || '';
-        if (!adv) return <span style={{ color: '#999' }}>-</span>;
-        return (
-          <Tooltip title={<div style={{ maxWidth: 360, whiteSpace: 'pre-wrap' }}>{adv}</div>} overlayStyle={{ maxWidth: 400 }}>
-            <Tag color="success" style={{ cursor: 'pointer' }}>{adv.length > 25 ? adv.slice(0, 25) + '...' : adv}</Tag>
-          </Tooltip>
-        );
-      }
-    },
-    { 
-      title: '劣势/风险', 
-      dataIndex: 'risk',
-      key: 'risk',
-      width: 180,
-      render: (_: any, record: any) => {
-        const risk = record.risk || '';
-        if (!risk) return <span style={{ color: '#999' }}>-</span>;
-        return (
-          <Tooltip title={<div style={{ maxWidth: 360, whiteSpace: 'pre-wrap' }}>{risk}</div>} overlayStyle={{ maxWidth: 400 }}>
-            <Tag color="error" style={{ cursor: 'pointer' }}>{risk.length > 25 ? risk.slice(0, 25) + '...' : risk}</Tag>
-          </Tooltip>
-        );
-      }
-    },
-    { 
-      title: 'AI初筛结果', 
-      dataIndex: 'screening_result',
-      key: 'screening_result',
-      width: 120,
-      render: (_: any, record: any) => {
-        const result = record.screening_result || '';
-        const labelMap: Record<string, string> = {
-          '强烈推荐': '强烈推荐',
-          '推荐': '推荐',
-          '待定': '待定',
-          '不推荐': '不推荐',
-          '强烈不推荐': '强烈不推荐',
-          '通过': '通过',
-          '未通过': '未通过',
-        };
-        const colorMap: Record<string, string> = {
-          '强烈推荐': 'success',
-          '推荐': 'cyan',
-          '待定': 'warning',
-          '不推荐': 'error',
-          '强烈不推荐': 'error',
-          '通过': 'success',
-          '未通过': 'error',
-        };
-        if (!result) return <span style={{ color: '#999' }}>-</span>;
-        const color = colorMap[result] || 'default';
-        return <Tag color={color}>{result}</Tag>;
-      }
-    },
-    { 
-      title: '状态', 
-      dataIndex: 'status', 
-      key: 'status',
-      render: (status: string, record: any) => {
-        let color = 'default';
-        let text = status;
-        switch(status) {
-          case 'pending_screening': color = 'warning'; text = '待初筛'; break;
-          case 'pending_review': color = 'warning'; text = '待评审'; break;
-          case 'pending_dept_review': color = 'cyan'; text = '待部门评审'; break;
-          case 'pending_hr_decision': color = 'purple'; text = '待HR决策'; break;
-          case 'auto_rejected_pending_review': color = 'orange'; text = 'AI建议淘汰'; break;
-          case 'pending_interview': color = 'geekblue'; text = '待面试'; break;
-          case 'approved': color = 'success'; text = '已入库'; break;
-          case 'interview_passed': color = 'lime'; text = '面试通过'; break;
-          case 'interview_failed': color = 'magenta'; text = '面试未通过'; break;
-          case 'offer_pending': color = 'blue'; text = 'Offer待确认'; break;
-          case 'offer_accepted': color = 'success'; text = '已接受Offer'; break;
-          case 'offer_rejected': color = 'error'; text = '已拒绝Offer'; break;
-          case 'waitlist': color = 'gold'; text = '备选'; break;
-          case 'completed': color = 'success'; text = '已完成'; break;
-          case 'rejected': color = 'error'; text = '已淘汰'; break;
-          case 'hired': color = 'success'; text = '已录用'; break;
-          default: break;
+  const renderActionButtons = (record: any) => {
+    if (user?.role === 'interviewer') {
+      return <Button type="primary" size="small" icon={<EyeOutlined />} onClick={() => navigate(`/resumes/${record.id}`)}>查看并评审</Button>;
+    }
+    const isAdminOrHr = user?.role === 'admin' || user?.role === 'hr';
+    const isPending = record.status === 'pending_screening';
+    const isApproved = record.status === 'approved';
+    const isRejected = record.status === 'rejected';
+    return (
+      <Space size="small" wrap>
+        <Tooltip title="预览"><Button type="text" size="small" icon={<FileTextOutlined style={{ color: '#6366F1' }} />} onClick={() => handlePreview(record)} /></Tooltip>
+        <Tooltip title="下载"><Button type="text" size="small" icon={<DownloadOutlined style={{ color: '#22C55E' }} />} onClick={() => handleDownload(record)} /></Tooltip>
+        {isAdminOrHr && isPending && (
+          <>
+            <Button type="primary" size="small" icon={<CheckOutlined style={{ color: '#52c41a' }} />} onClick={() => handleApproveToTalentPool(record)}>入库</Button>
+            <Button size="small" icon={<CloseOutlined />} onClick={() => handleReject(record)}>不入库</Button>
+          </>
+        )}
+        {isApproved && <Tag color="success">已入库</Tag>}
+        {isRejected && <Tag color="error">已淘汰</Tag>}
+        <Tooltip title="删除"><Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)} /></Tooltip>
+      </Space>
+    );
+  };
+
+  const statusTag = (status: string) => {
+    const m: Record<string, { color: string; text: string }> = {
+      'pending_screening': { color: 'warning', text: '待初筛' },
+      'approved': { color: 'success', text: '已入库' },
+      'rejected': { color: 'error', text: '已淘汰' },
+    };
+    const c = m[status] || { color: 'default', text: status || '待初筛' };
+    return <Tag color={c.color}>{c.text}</Tag>;
+  };
+
+  const screeningResultColor = (result: string) => {
+    const cm: Record<string, string> = {
+      '强烈推荐': 'success', '推荐': 'cyan', '待定': 'warning',
+      '不推荐': 'error', '强烈不推荐': 'error', '通过': 'success', '未通过': 'error',
+    };
+    if (!result) return null;
+    return <Tag color={cm[result] || 'default'}>{result}</Tag>;
+  };
+
+  /** 清理年龄显示 */
+  const cleanAge = (age: any): string | null => {
+    if (age === null || age === undefined || age === '' || age === '无') return null;
+    const s = String(age).replace(/岁/g, '').trim();
+    if (!s || s === '无' || s === 'None') return null;
+    return s + '岁';
+  };
+
+  /** 清理性别显示 */
+  const cleanGender = (g: any): string | null => {
+    if (!g || g === '无' || g === '无相关信息' || g === 'None') return null;
+    return g === '男' ? '男' : g === '女' ? '女' : null;
+  };
+
+  /** 从 ai_evaluation 中解析能力维度评分明细 */
+  const parseScoreDetail = (aiEval: any): { name: string; score: number; reason: string }[] | null => {
+    // === 格式1：JSON 对象（来自 D1 ai_evaluation） ===
+    if (aiEval && typeof aiEval === 'object' && !Array.isArray(aiEval)) {
+      if (Array.isArray(aiEval.dimensions)) return aiEval.dimensions;
+    }
+    if (typeof aiEval !== 'string' || !aiEval) return null;
+
+    // === 格式2：JSON 双重转义字符串 ===
+    // 数据库里存的格式：{"summary": "{\\"dimensions\\": [...]}"}
+    // 或者内层 JSON 可能被截断（>500字符），需降级为正则提取
+    if (aiEval.startsWith('{')) {
+      try {
+        const outer = JSON.parse(aiEval);
+        if (outer.summary && typeof outer.summary === 'string') {
+          try {
+            const inner = JSON.parse(outer.summary);
+            if (Array.isArray(inner.dimensions) && inner.dimensions.length > 0) {
+              return inner.dimensions.map((d: any) => ({
+                name: d.name || '',
+                score: d.score ?? 0,
+                reason: d.reason || '',
+              }));
+            }
+          } catch (_innerErr) {
+            // 内层 JSON 被截断，用正则从 summary 字符串中提取维度
+            const dims: { name: string; score: number; reason: string }[] = [];
+            const re = /"name"\s*:\s*"([^"]*?)"\s*,\s*"score"\s*:\s*(\d+(?:\.\d+)?)\s*,/g;
+            let m: RegExpExecArray | null;
+            while ((m = re.exec(outer.summary)) !== null) {
+              dims.push({ name: m[1], score: parseFloat(m[2]), reason: '' });
+            }
+            if (dims.length > 0) return dims;
+          }
         }
-        return <Tag color={color}>{text}</Tag>;
+      } catch (_outerErr) {
+        // 外层 JSON 非标准，看看别的格式
       }
-    },
-    {
-      title: '操作',
-      key: 'action',
-      fixed: 'right' as const,
-      width: 260,
-      render: (_, record: any) => {
-        // 面试官只能查看和评审
-        if (user?.role === 'interviewer') {
-          return (
-            <Space size="small">
-              <Button type="primary" icon={<EyeOutlined />} onClick={() => navigate(`/resumes/${record.id}`)}>
-                查看并评审
-              </Button>
-            </Space>
-          );
+    }
+
+    // === 格式3：文本格式（能力维度匹配） ===
+    // 支持各种变体：能力维度匹配：、能力维度匹配**：、能力维度匹配**:
+    // 维度行格式：**名称：X/5分。依据：理由、**名称：X/5分**。依据：理由、**名称：X/5分。依据**：理由
+    if (aiEval.includes('能力维度匹配')) {
+      // 提取维度区块：每个维度行以 "  - **" 开头，下一个章节以 "\n-" 开头（非两个空格后跟短杠）
+      const dimSection = aiEval.match(/能力维度匹配\*{0,2}[：:]\s*([\s\S]*?)(?=\n(?!  - )|$)/);
+      if (!dimSection) return null;
+      const lines = dimSection[1].split('\n').filter(l => l.includes('**'));
+      const results: { name: string; score: number; reason: string }[] = [];
+      for (const line of lines) {
+        // 匹配各种变体：分数可以是整数或小数；** 可能出现在分数后或依据前
+        const m = line.match(/\*\*(.+?)[：:]\s*(\d+(?:\.\d+)?)\/5分\*{0,2}[。.]*\s*依据\*{0,2}[：:](.*)/);
+        if (m) {
+          results.push({
+            name: m[1].trim(),
+            score: parseFloat(m[2]),
+            reason: m[3].replace(/\*\*/g, '').trim(),
+          });
         }
+      }
+      if (results.length > 0) return results;
+    }
 
-        // HR和管理员的操作
-        // 只有初审通过（pending_interview）才能安排面试
-        const canScheduleInterview = record.status === 'pending_interview';
-        // 可以进行评审操作的状态
-        const canReview = ['pending_review', 'pending_dept_review', 'pending_hr_decision', 'auto_rejected_pending_review'].includes(record.status);
+    return null;
+  };
 
-        return (
-          <Space size="small">
-            <Tooltip title="预览简历">
-              <Button type="text" icon={<FileTextOutlined style={{ color: '#6366F1' }} />} onClick={() => handlePreview(record)} />
-            </Tooltip>
-            <Tooltip title="下载简历">
-              <Button type="text" icon={<DownloadOutlined style={{ color: '#22C55E' }} />} onClick={() => handleDownload(record)} />
-            </Tooltip>
-            {/* Only Admin and HR can schedule interviews - only after initial review passed */}
-            {(user?.role === 'admin' || user?.role === 'hr') && canScheduleInterview && (
-              <Tooltip title="安排面试">
-                <Button type="text" icon={<TeamOutlined style={{ color: '#10B981' }} />} onClick={() => handleCreateInterviewClick(record)} />
-              </Tooltip>
-            )}
-            {/* 如果可以评审，显示评审入口提示 */}
-            {(user?.role === 'admin' || user?.role === 'hr') && canReview && (
-              <Tooltip title="进入评审">
-                <Button type="text" icon={<SolutionOutlined style={{ color: '#8B5CF6' }} />} onClick={() => navigate(`/resumes/${record.id}`)} />
-              </Tooltip>
-            )}
-            {/* 只显示入库按钮 */}
-            {(user?.role === 'admin' || user?.role === 'hr') && record.status === 'pending_screening' && (
-              <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => handleApproveToTalentPool(record)}>
-                入库
-              </Button>
-            )}
-            {(user?.role === 'admin' || user?.role === 'hr') && record.status === 'pending_screening' && (
-              <Button size="small" icon={<CloseOutlined />} onClick={() => handleReject(record)}>
-                不入库
-              </Button>
-            )}
+  /** 算总分（根据明细） */
+  const calcTotalScore = (details: { score: number }[]): number => {
+    return details.length > 0 ? Math.round(details.reduce((s, d) => s + d.score, 0) / details.length * 10) / 10 : 0;
+  };
 
-            <Tooltip title="删除">
-              <Button type="text" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)} />
-            </Tooltip>
-          </Space>
-        );
-      },
-    },
-  ];
+  // 卡片分页
+  const pageSize = 20;
+  const [cardPage, setCardPage] = useState(1);
+  const pagedData = data.slice((cardPage - 1) * pageSize, cardPage * pageSize);
 
   return (
-    <div>
-      <div style={{ marginBottom: 32, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+    <div style={{ maxWidth: '100%' }}>
+      <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div>
-          <Title level={2} style={{ margin: 0, fontWeight: 700 }}>
+          <Title level={3} style={{ margin: 0, fontWeight: 600 }}>
             {user?.role === 'interviewer' ? '我的待评审' : '简历管理'}
           </Title>
-          <Text type="secondary">
+          <Text type="secondary" style={{ fontSize: 13 }}>
             {user?.role === 'interviewer' ? '被指派给您的待评审简历' : '管理候选人简历及面试流程'}
           </Text>
         </div>
-        <Space>
+        <Space size="small">
           {user?.role !== 'interviewer' && (
             <>
-              <Button icon={pollingEnabled ? <SyncOutlined spin /> : <ReloadOutlined />} onClick={() => fetchResumes()}>
-                {pollingEnabled ? '解析中...' : '刷新'}
+              <Button size="small" icon={pollingEnabled ? <SyncOutlined spin /> : <ReloadOutlined />} onClick={() => fetchResumes()}>
+                {pollingEnabled ? '解析中...' : '从飞书导入'}
               </Button>
-              <Button danger icon={<CloseCircleOutlined />} onClick={handleClearRejected}>
+              <Button size="small" icon={<RobotOutlined />} onClick={handleAutoEvaluateAll}
+                title="从PDF提取文本 → AI评分维度 → 保存显示（跳过已有评估的简历）">
+                AI自动评估
+              </Button>
+              <Button size="small" icon={<RobotOutlined />} onClick={handleBatchAIEvaluate}>
+                AI批量评估
+              </Button>
+              <Button size="small" icon={<SyncOutlined />} onClick={handleBatchReparse}>
+                全部重解析
+              </Button>
+              <Button size="small" danger icon={<CloseCircleOutlined />} onClick={handleClearRejected}>
                 清除已淘汰
               </Button>
-              <Button type="primary" icon={<PlusOutlined />} onClick={handleUploadClick} size="large" style={{ borderRadius: '8px' }}>上传简历</Button>
+              <Button type="primary" icon={<PlusOutlined />} onClick={handleUploadClick}>上传简历</Button>
+              <Button icon={<DownloadOutlined />} onClick={() => setBossImportOpen(true)}>BOSS导入</Button>
             </>
           )}
           {user?.role === 'interviewer' && (
-            <Button icon={pollingEnabled ? <SyncOutlined spin /> : <ReloadOutlined />} onClick={() => fetchResumes()}>
-              {pollingEnabled ? '解析中...' : '刷新'}
+            <Button size="small" icon={pollingEnabled ? <SyncOutlined spin /> : <ReloadOutlined />} onClick={() => fetchResumes()}>
+              {pollingEnabled ? '解析中...' : '从飞书导入'}
             </Button>
           )}
         </Space>
       </div>
 
+      {/* 统计卡片 */}
+      <Row gutter={12} style={{ marginBottom: 16 }}>
+        <Col span={4}>
+          <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
+            <Statistic
+              title={<span style={{ fontSize: 13 }}>总简历数</span>}
+              value={data.length}
+              suffix="份"
+              valueStyle={{ color: '#1677ff', fontSize: 22, fontWeight: 600 }}
+            />
+          </Card>
+        </Col>
+        <Col span={4}>
+          <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
+            <Statistic
+              title={<span style={{ fontSize: 13 }}>简历初筛</span>}
+              value={data.filter((r: any) => r.status === 'approved' || r.status === 'rejected').length}
+              suffix="人"
+              valueStyle={{ color: '#722ed1', fontSize: 22, fontWeight: 600 }}
+            />
+          </Card>
+        </Col>
+        <Col span={4}>
+          <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
+            <Statistic
+              title={<span style={{ fontSize: 13 }}>面试</span>}
+              value={data.filter((r: any) => r.status === 'approved').length}
+              suffix="人"
+              valueStyle={{ color: '#52c41a', fontSize: 22, fontWeight: 600 }}
+            />
+          </Card>
+        </Col>
+        <Col span={4}>
+          <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
+            <Statistic
+              title={<span style={{ fontSize: 13 }}>Offer沟通</span>}
+              value={statsOffer}
+              suffix="人"
+              valueStyle={{ color: '#fa8c16', fontSize: 22, fontWeight: 600 }}
+            />
+          </Card>
+        </Col>
+        <Col span={4}>
+          <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
+            <Statistic
+              title={<span style={{ fontSize: 13 }}>待入职</span>}
+              value={statsPendingOnboard}
+              suffix="人"
+              valueStyle={{ color: '#1677ff', fontSize: 22, fontWeight: 600 }}
+            />
+          </Card>
+        </Col>
+        <Col span={4}>
+          <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
+            <Statistic
+              title={<span style={{ fontSize: 13 }}>已入职</span>}
+              value={statsCompletedOnboard}
+              suffix="人"
+              valueStyle={{ color: '#52c41a', fontSize: 22, fontWeight: 600 }}
+            />
+          </Card>
+        </Col>
+      </Row>
+
       {user?.role !== 'interviewer' && (
-        <Card style={{ marginBottom: 24, borderRadius: '8px' }} bodyStyle={{ padding: '24px' }}>
-          <Form layout="inline">
+        <Card size="small" style={{ marginBottom: 16, borderRadius: 6 }} styles={{ body: { padding: '12px 16px' } }}>          <Form layout="inline" size="small">
             <Form.Item label="候选人">
               <Input
                 placeholder="请输入姓名"
@@ -785,24 +1034,27 @@ const ResumesList: React.FC = () => {
                 placeholder="请选择状态"
                 value={searchStatus}
                 onChange={val => setSearchStatus(val)}
-                style={{ width: 150 }}
+                style={{ width: 130 }}
                 allowClear
               >
                 <Select.Option value="pending_screening">待初筛</Select.Option>
-                <Select.Option value="pending_review">待评审</Select.Option>
-                <Select.Option value="pending_dept_review">待部门评审</Select.Option>
-                <Select.Option value="pending_hr_decision">待HR决策</Select.Option>
-                <Select.Option value="auto_rejected_pending_review">AI建议淘汰</Select.Option>
-                <Select.Option value="pending_interview">待面试</Select.Option>
-                <Select.Option value="interview_passed">面试通过</Select.Option>
-                <Select.Option value="interview_failed">面试未通过</Select.Option>
-                <Select.Option value="offer_pending">Offer待确认</Select.Option>
-                <Select.Option value="offer_accepted">已接受Offer</Select.Option>
-                <Select.Option value="offer_rejected">已拒绝Offer</Select.Option>
-                <Select.Option value="waitlist">备选</Select.Option>
-                <Select.Option value="completed">已完成</Select.Option>
+                <Select.Option value="approved">已入库</Select.Option>
                 <Select.Option value="rejected">已淘汰</Select.Option>
-                <Select.Option value="hired">已录用</Select.Option>
+              </Select>
+            </Form.Item>
+            <Form.Item label="岗位">
+              <Select
+                placeholder="请选择岗位"
+                value={searchPosition}
+                onChange={val => setSearchPosition(val)}
+                style={{ width: 180 }}
+                allowClear
+                showSearch
+                optionFilterProp="children"
+              >
+                {positions.map((p: any) => (
+                  <Select.Option key={p.id || p.title} value={p.title}>{p.title}</Select.Option>
+                ))}
               </Select>
             </Form.Item>
             {selectedRowKeys.length > 0 && (
@@ -831,19 +1083,143 @@ const ResumesList: React.FC = () => {
         </Card>
       )}
 
-      <Table 
-        columns={columns} 
-        dataSource={data} 
-        loading={loading} 
-        rowKey="id" 
-        size="small"
-        scroll={{ x: 'max-content' }}
-        pagination={{ pageSize: 15, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
-        rowSelection={{
-          selectedRowKeys,
-          onChange: setSelectedRowKeys,
-        }}
-      />
+      {/* 候选人卡片列表 */}
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 60 }}>
+          <SyncOutlined spin style={{ fontSize: 32, color: '#1677ff' }} />
+          <p style={{ marginTop: 12, color: '#666' }}>加载中...</p>
+        </div>
+      ) : data.length === 0 ? (
+        <Empty description="暂无简历数据" style={{ padding: 60 }} />
+      ) : (
+        <>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {pagedData.map((record: any) => {
+              const ageText = cleanAge(record.age);
+              const genderText = cleanGender(record.gender);
+              const scoreDetails = parseScoreDetail(record.ai_evaluation);
+              const totalScore = scoreDetails ? calcTotalScore(scoreDetails) : null;
+              const matchCount = scoreDetails?.filter(d => d.score >= 3).length || 0;
+              const totalDims = scoreDetails?.length || 0;
+
+              // 悬浮详情内容：AI 评估条件符合 X/Y
+              const popoverContent = (
+                <div style={{ maxWidth: 500, fontSize: 13, lineHeight: 1.8 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 14, borderBottom: '1px solid #f0f0f0', paddingBottom: 6 }}>
+                    AI 评估条件符合 {matchCount}/{totalDims}
+                  </div>
+                  {scoreDetails?.map((d, i) => {
+                    const isMatch = d.score >= 3;
+                    return (
+                      <div key={i} style={{ marginBottom: 6, padding: '4px 0', borderBottom: i < scoreDetails.length - 1 ? '1px dashed #f5f5f5' : 'none' }}>
+                        <div style={{ fontWeight: 600, color: '#262626' }}>{d.name}</div>
+                        <div style={{ color: isMatch ? '#52c41a' : '#ff4d4f', fontSize: 12 }}>
+                          {isMatch ? '符合' : '不符合'} <span style={{ color: '#595959' }}>（分数：{d.score}）</span>
+                        </div>
+                        <div style={{ color: '#8c8c8c', fontSize: 12, whiteSpace: 'pre-wrap', marginTop: 2 }}>
+                          {d.reason}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+
+              return (
+                <Card
+                  key={record.id}
+                  size="small"
+                  style={{ border: '1px solid #f0f0f0' }}
+                  styles={{ body: { padding: '10px 16px' } }}
+                  hoverable
+                  onClick={() => navigate(`/resumes/${record.id}`)}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16, cursor: 'pointer', minHeight: 36 }} onClick={e => e.stopPropagation()}>
+                    {/* 复选框 */}
+                    <Checkbox
+                      checked={selectedRowKeys.includes(record.id)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedRowKeys([...selectedRowKeys, record.id]);
+                        } else {
+                          setSelectedRowKeys(selectedRowKeys.filter(k => k !== record.id));
+                        }
+                      }}
+                    />
+
+                    {/* 姓名 + 基本信息 */}
+                    <div style={{ minWidth: 150, flexShrink: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14, lineHeight: '20px' }}>{record.candidate_name || '未知'}</div>
+                      <div style={{ color: '#8c8c8c', fontSize: 12, lineHeight: '18px' }}>
+                        {[genderText, ageText, record.education, record.major].filter(Boolean).join(' · ') || '—'}
+                      </div>
+                    </div>
+
+                    {/* 应聘岗位（标准岗位名） */}
+                    {record.position_applied && (
+                      <div style={{ fontSize: 12, color: '#595959', minWidth: 110, maxWidth: 150, flexShrink: 0 }}>
+                        <span style={{ color: '#bfbfbf' }}>应聘：</span>
+                        <span style={{ wordBreak: 'break-word' }}>{record.standard_position || record.position_applied}</span>
+                        {(record.standard_position && record.standard_position !== record.position_applied) && (
+                          <Tooltip title={`原始岗位：${record.position_applied}`}>
+                            <InfoCircleOutlined style={{ marginLeft: 4, color: '#999', fontSize: 10 }} />
+                          </Tooltip>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 状态标签 */}
+                    <div style={{ flexShrink: 0 }}>{statusTag(record.status)}</div>
+
+                    {/* AI 评估条件 */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, flex: 1, minWidth: 0, maxWidth: '100%' }}>
+                      {scoreDetails && scoreDetails.length > 0 && (
+                        <Popover content={popoverContent} title={null} trigger="hover" placement="bottom">
+                          <span style={{ fontSize: 12, color: '#1677ff', whiteSpace: 'nowrap', cursor: 'pointer', background: '#f0f5ff', padding: '1px 6px', borderRadius: 4, flexShrink: 0, marginTop: 5 }}>
+                            AI {matchCount}/{totalDims}
+                          </span>
+                        </Popover>
+                      )}
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', flex: 1, minWidth: 0, alignItems: 'flex-start' }}>
+                        {scoreDetails?.map((d: any, i: number) => {
+                          const isMatch = d.score >= 3;
+                          return (
+                            <Popover key={i} content={popoverContent} title={null} trigger="hover" placement="bottom">
+                              <span style={{ fontSize: 12, lineHeight: '20px', padding: '1px 8px', border: `1px solid ${isMatch ? '#b7eb8f' : '#ffccc7'}`, borderRadius: 4, whiteSpace: 'normal', wordBreak: 'break-word', display: 'inline-block', background: isMatch ? '#f6ffed' : '#fff2f0', maxWidth: 260 }}>
+                                <span style={{ marginRight: 2 }}>{isMatch ? '✅' : '❌'}</span>
+                                <span>{d.name}</span>
+                                <span style={{ marginLeft: 4, color: isMatch ? '#52c41a' : '#ff4d4f', fontWeight: 500 }}>{d.score}</span>
+                              </span>
+                            </Popover>
+                          );
+                        })}
+                        {(!scoreDetails || scoreDetails.length === 0) && (
+                          <span style={{ color: '#bfbfbf', fontSize: 12 }}>暂无评估</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 操作按钮 */}
+                    <div style={{ flexShrink: 0, marginLeft: 'auto' }} onClick={e => e.stopPropagation()}>
+                      {renderActionButtons(record)}
+                    </div>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+            <Pagination
+              current={cardPage}
+              pageSize={pageSize}
+              total={data.length}
+              showSizeChanger={false}
+              showTotal={(t) => `共 ${t} 条`}
+              onChange={(p) => setCardPage(p)}
+            />
+          </div>
+        </>
+      )}
 
       {/* Upload Modal */}
       <Modal
@@ -1158,6 +1534,203 @@ const ResumesList: React.FC = () => {
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
             加载中...
+          </div>
+        )}
+      </Modal>
+
+      {/* 评估维度配置弹窗 */}
+      <Modal
+        title="设置评估维度"
+        open={dimModalOpen}
+        onCancel={() => setDimModalOpen(false)}
+        afterOpenChange={(open) => {
+          if (open) {
+            // 打开弹窗时同步最新维度配置到表单
+            dimForm.setFieldsValue({
+              dimensions: evalDims.map(d => ({ key: d.key, label: d.label, description: d.description, prompt_hint: d.prompt_hint }))
+            });
+          }
+        }}
+        onOk={handleSaveEvalDims}
+        width={700}
+        centered
+        destroyOnClose
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form
+          form={dimForm}
+          layout="vertical"
+          style={{ marginTop: 16 }}
+        >
+          <Form.List name="dimensions">
+            {(fields, { add, remove }) => (
+              <div>
+                {fields.map(({ key, name, ...restField }) => (
+                  <Card
+                    key={key}
+                    size="small"
+                    style={{ marginBottom: 12 }}
+                    styles={{ body: { padding: 12 } }}
+                  >
+                    <Space style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                      <span style={{ fontWeight: 500 }}>维度 #{name + 1}</span>
+                      {fields.length > 1 && (
+                        <Button type="link" danger onClick={() => remove(name)}>删除</Button>
+                      )}
+                    </Space>
+                    <Form.Item
+                      {...restField}
+                      name={[name, 'label']}
+                      label="维度名称"
+                      rules={[{ required: true, message: '请输入维度名称' }]}
+                    >
+                      <Input placeholder="例如：本科、AI 能力" />
+                    </Form.Item>
+                    <Form.Item
+                      {...restField}
+                      name={[name, 'description']}
+                      label="维度说明（简短描述此维度评估什么）"
+                    >
+                      <Input.TextArea rows={2} placeholder="例如：候选人是否具备本科及以上学历" />
+                    </Form.Item>
+                    <Form.Item
+                      {...restField}
+                      name={[name, 'prompt_hint']}
+                      label="评估提示词（英文，给 AI 的判断依据）"
+                    >
+                      <Input.TextArea rows={2} placeholder="例如：Does the candidate have a bachelor's degree or above?" />
+                    </Form.Item>
+                    {/* 隐藏 key 字段 */}
+                    <Form.Item {...restField} name={[name, 'key']} hidden>
+                      <Input />
+                    </Form.Item>
+                  </Card>
+                ))}
+                <Button type="dashed" onClick={() => add({ key: '', label: '', description: '', prompt_hint: '' })} block icon={<PlusOutlined />}>
+                  添加维度
+                </Button>
+              </div>
+            )}
+          </Form.List>
+        </Form>
+      </Modal>
+
+      {/* BOSS 直聘 Excel 批量导入 */}
+      <Modal
+        title="BOSS 直聘候选人批量导入"
+        open={bossImportOpen}
+        onCancel={() => { setBossImportOpen(false); setBossPreview([]); setBossImportResult(null); }}
+        footer={null}
+        width={800}
+        centered
+        destroyOnClose
+      >
+        <div style={{ marginBottom: 16 }}>
+          <Text type="secondary">
+            从 BOSS 直聘后台导出候选人 Excel 文件，系统将自动解析并批量进行 AI 评估。
+          </Text>
+        </div>
+
+        {/* 文件选择 */}
+        {bossPreview.length === 0 && !bossImportResult && (
+          <div
+            style={{
+              border: '2px dashed #d9d9d9', borderRadius: 8, padding: 40,
+              textAlign: 'center', cursor: 'pointer', background: '#fafafa',
+            }}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <UploadOutlined style={{ fontSize: 32, color: '#1677ff' }} />
+            <p style={{ marginTop: 12, color: '#666' }}>点击选择 BOSS 导出的 Excel 文件（.xlsx / .xls）</p>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              style={{ display: 'none' }}
+              onChange={handleBossFileSelect}
+            />
+          </div>
+        )}
+
+        {/* 预览数据 */}
+        {bossPreview.length > 0 && !bossImportResult && (
+          <div>
+            <div style={{ marginBottom: 12 }}>
+              <Text strong>解析到 {bossPreview.length} 条候选人数据</Text>
+            </div>
+            <div style={{ maxHeight: 400, overflow: 'auto', marginBottom: 16, border: '1px solid #f0f0f0', borderRadius: 4 }}>
+              <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#fafafa', position: 'sticky', top: 0 }}>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #f0f0f0', textAlign: 'left' }}>姓名</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #f0f0f0', textAlign: 'left' }}>性别</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #f0f0f0', textAlign: 'left' }}>年龄</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #f0f0f0', textAlign: 'left' }}>学历</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #f0f0f0', textAlign: 'left' }}>学校</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #f0f0f0', textAlign: 'left' }}>应聘岗位</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #f0f0f0', textAlign: 'left' }}>手机号</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bossPreview.map((row, i) => (
+                    <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : '#fafafa' }}>
+                      <td style={{ padding: '4px 8px', borderBottom: '1px solid #f5f5f5' }}>{row.name}</td>
+                      <td style={{ padding: '4px 8px', borderBottom: '1px solid #f5f5f5' }}>{row.gender}</td>
+                      <td style={{ padding: '4px 8px', borderBottom: '1px solid #f5f5f5' }}>{row.age}</td>
+                      <td style={{ padding: '4px 8px', borderBottom: '1px solid #f5f5f5' }}>{row.education}</td>
+                      <td style={{ padding: '4px 8px', borderBottom: '1px solid #f5f5f5' }}>{row.school}</td>
+                      <td style={{ padding: '4px 8px', borderBottom: '1px solid #f5f5f5' }}>{row.position_applied}</td>
+                      <td style={{ padding: '4px 8px', borderBottom: '1px solid #f5f5f5' }}>{row.phone}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Space>
+              <Button onClick={() => { setBossPreview([]); setBossImportResult(null); }}>重新选择文件</Button>
+              <Button type="primary" icon={<DownloadOutlined />} loading={bossImporting} onClick={handleBossImport}>
+                确认导入 {bossPreview.length} 条
+              </Button>
+            </Space>
+          </div>
+        )}
+
+        {/* 导入结果 */}
+        {bossImportResult && (
+          <div>
+            <div style={{ marginBottom: 12 }}>
+              <Text strong style={{ color: bossImportResult.imported > 0 ? '#52c41a' : '#faad14' }}>
+                导入完成：成功 {bossImportResult.imported} 条
+                {bossImportResult.skipped > 0 && `，跳过 ${bossImportResult.skipped} 条`}
+                {bossImportResult.failed > 0 && `，失败 ${bossImportResult.failed} 条`}
+              </Text>
+            </div>
+            <div style={{ maxHeight: 300, overflow: 'auto', marginBottom: 16, border: '1px solid #f0f0f0', borderRadius: 4 }}>
+              <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#fafafa', position: 'sticky', top: 0 }}>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #f0f0f0', textAlign: 'left' }}>姓名</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #f0f0f0', textAlign: 'left' }}>结果</th>
+                    <th style={{ padding: '6px 8px', borderBottom: '1px solid #f0f0f0', textAlign: 'left' }}>说明</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bossImportResult.results?.map((r: any, i: number) => (
+                    <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : '#fafafa' }}>
+                      <td style={{ padding: '4px 8px', borderBottom: '1px solid #f5f5f5' }}>{r.name}</td>
+                      <td style={{ padding: '4px 8px', borderBottom: '1px solid #f5f5f5' }}>
+                        {r.success ? <Text style={{ color: '#52c41a' }}>✅ 成功</Text> : <Text style={{ color: '#ff4d4f' }}>❌ 失败</Text>}
+                      </td>
+                      <td style={{ padding: '4px 8px', borderBottom: '1px solid #f5f5f5' }}>{r.message}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Space>
+              <Button onClick={() => { setBossImportOpen(false); setBossPreview([]); setBossImportResult(null); fetchResumes(); }}>关闭</Button>
+            </Space>
           </div>
         )}
       </Modal>

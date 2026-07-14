@@ -21,26 +21,58 @@ from datetime import datetime
 from sqlalchemy import or_, and_, func
 import json
 
+import subprocess
+import tempfile
+import shutil
+
+def _find_mineru():
+    """在 PATH 中查找 mineru-open-api 可执行文件路径"""
+    return shutil.which("mineru-open-api") or "mineru-open-api"
+
 def read_file_content(file_path: str) -> str:
+    """
+    读取文件内容，PDF 优先使用 MinerU (flash-extract) 以获得更高质量解析。
+    返回 (raw_text, markdown_text)，markdown_text 是 MinerU 输出的结构化 Markdown。
+    """
     _, ext = os.path.splitext(file_path)
-    content = ""
+    ext = ext.lower()
+    raw = ""
+    md = ""
+
     try:
         if ext == '.docx':
             doc = docx.Document(file_path)
-            content = '\n'.join([para.text for para in doc.paragraphs])
+            raw = '\n'.join([para.text for para in doc.paragraphs])
         elif ext == '.pdf':
-            with open(file_path, 'rb') as f:
-                reader = PyPDF2.PdfReader(f)
-                for page in reader.pages:
-                    content += page.extract_text()
+            # 尝试用 MinerU flash-extract 解析
+            try:
+                mineru = _find_mineru()
+                result = subprocess.run(
+                    [mineru, "flash-extract", file_path, "--language", "ch"],
+                    capture_output=True, text=True, timeout=120
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    md = result.stdout.strip()
+                    # 从 Markdown 中提取纯文本作为 raw_text（去掉格式标记）
+                    raw = md
+                else:
+                    print(f"MinerU flash-extract returned non-zero: {result.stderr}")
+                    raise RuntimeError("MinerU failed")
+            except Exception as mineru_err:
+                print(f"MinerU parse failed for {file_path}: {mineru_err}, falling back to PyPDF2")
+                with open(file_path, 'rb') as f:
+                    reader = PyPDF2.PdfReader(f)
+                    for page in reader.pages:
+                        raw += page.extract_text()
         elif ext in ('.txt', '.md', '.markdown'):
             with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+                raw = f.read()
         else:
             print(f"Unsupported file type: {ext}")
     except Exception as e:
         print(f"Error reading file {file_path}: {e}")
-    return content
+
+    return raw, md
 
 from app.config.database import SessionLocal
 from fastapi import BackgroundTasks
@@ -59,14 +91,19 @@ def process_resume_task(payload: Dict[str, Any]):
         resume.parse_error = None
         db.commit()
 
-        content = read_file_content(resume.file_path)
-        if not content:
+        raw_text, resume_md = read_file_content(resume.file_path)
+        if not raw_text:
             resume.parse_status = "failed"
             resume.parse_error = "读取简历内容失败"
             db.commit()
             return
 
-        resume.raw_text = content
+        resume.raw_text = raw_text
+        if resume_md:
+            resume.resume_markdown = resume_md
+
+        # 用 Markdown（如有）作为 AI 分析输入，质量更高
+        content = resume_md or raw_text
 
         position = db.query(Position).filter(Position.id == position_id).first()
         if not position:

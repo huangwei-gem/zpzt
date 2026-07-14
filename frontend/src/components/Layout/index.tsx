@@ -16,9 +16,9 @@ import {
   CheckCircleOutlined,
   FilterOutlined,
   BarChartOutlined,
-  RadarChartOutlined,
   FolderOpenOutlined,
   PartitionOutlined,
+  MailOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
@@ -58,32 +58,14 @@ const AppLayout: React.FC = () => {
       roles: ['admin', 'hr'],
     },
     {
-      key: '/interviewer-mapping',
-      icon: <PartitionOutlined />,
-      label: '面试官映射表',
-      roles: ['admin', 'hr'],
-    },
-    {
       key: '/resumes',
       icon: <FileTextOutlined />,
       label: '简历管理',
     },
     {
-      key: '/talent-pool',
-      icon: <UsergroupAddOutlined />,
-      label: '人才库',
-      roles: ['admin', 'hr'],
-    },
-    {
       key: '/interviews',
       icon: <TeamOutlined />,
       label: '面试管理',
-    },
-    {
-      key: '/background-checks',
-      icon: <SafetyOutlined />,
-      label: '背调管理',
-      roles: ['admin', 'hr'],
     },
     {
       key: '/onboarding',
@@ -98,21 +80,10 @@ const AppLayout: React.FC = () => {
       roles: ['admin', 'hr'],
     },
     {
-      key: '/resume-screening',
-      icon: <FilterOutlined />,
-      label: '简历初筛',
-      roles: ['admin', 'hr'],
-    },
-    {
       key: '/daily-reports',
       icon: <BarChartOutlined />,
       label: '招聘日报',
       roles: ['admin', 'hr'],
-    },
-    {
-      key: '/workflows',
-      icon: <ApartmentOutlined />,
-      label: '工作流',
     },
     {
       key: '/settings/position-mappings',
@@ -121,15 +92,15 @@ const AppLayout: React.FC = () => {
       roles: ['admin'],
     },
     {
-      key: '/settings/capability-dimensions',
-      icon: <RadarChartOutlined />,
-      label: '能力维度',
+      key: '/users',
+      icon: <SettingOutlined />,
+      label: '用户管理',
       roles: ['admin'],
     },
     {
-      key: '/settings/users',
-      icon: <SettingOutlined />,
-      label: '用户管理',
+      key: '/settings/mail',
+      icon: <MailOutlined />,
+      label: '邮件设置',
       roles: ['admin'],
     },
   ];
@@ -144,9 +115,11 @@ const AppLayout: React.FC = () => {
       ? '个人设置'
       : location.pathname.startsWith('/settings/system')
         ? '系统设置'
-        : location.pathname.startsWith('/workflows/')
-          ? '工作流编辑'
-          : menuItems.find(item => item.key === location.pathname)?.label || 'AI 面试助手';
+        : location.pathname.startsWith('/settings/mail')
+          ? '邮件设置'
+          : location.pathname.startsWith('/workflows/')
+            ? '工作流编辑'
+            : menuItems.find(item => item.key === location.pathname)?.label || 'AI 面试助手';
 
   const userMenuItems: any[] = [
     {
