@@ -1,113 +1,25 @@
-# General
-.DS_Store
-.idea/
-.vscode/
-*.log
-*.sqlite
-*.db
-.claude/
-.env
-.env.*
-!.env.example
-!**/.env.example
-
-# Backend (Python)
+# Python
 __pycache__/
-**/__pycache__/
 *.py[cod]
-*$py.class
-.python-version
+*.egg-info/
+.venv
+venv/
 backend/venv/
-backend/.venv/
-backend/app.db
-backend/uploads/
-backend/htmlcov/
-backend/.pytest_cache/
-backend/dist/
-backend/build/
-backend/*.egg-info/
-.pytest_cache/
-.coverage
-htmlcov/
 
-
-# Frontend (Node.js)
-frontend/node_modules/
-frontend/dist/
-frontend/build/
-frontend/.vite/
-frontend/.env.local
-frontend/.env.development.local
-frontend/.env.test.local
-frontend/.env.production.local
-frontend/npm-debug.log*
-frontend/yarn-debug.log*
-frontend/yarn-error.log*
-frontend/pnpm-debug.log*
-frontend/.turbo/
-frontend/coverage/
-
-# Logs
-logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-dev-debug.log
-# Dependency directories
+# Node
 node_modules/
-# Editor directories and files
-.idea
-.vscode
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-# OS specific
+dist/
 
-# Temp / cache
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Wrangler
 .wrangler/
-memory/
-_frontend/
-*.bak
-_ca*
-worker/dist/
-frontend/public/_worker.js
 
-# Temp scripts
-scripts/add_*.py
-scripts/edit_*.py
-scripts/fix_*.py
-scripts/remove_*.py
-scripts/switch_*.py
-scripts/debug-*.mjs
-scripts/cache-resumes.mjs
-scripts/xiaoqi_*
-scripts/test-*.mjs
-
-# Root-level utility scripts (temp)
-export_data.py
-parse_resumes.py
-check_*.py
-check_*.mjs
-check_*.json
-extract_*.py
-final_test.py
-remove_sync_code.py
-test_api.*
-test_body.json
-test_*.py
-try-*.mjs
-try-*.py
-search_*.py
-try_mail_app.py
-
-# Worker temp files
-worker/_*.txt
-worker/_*.sql
-worker/fix_*.sql
-worker/data.sql
-worker/src/find_*.py
-
-# Xiaoqi (separate project)
-xiaoqi/
+# Deployment artifacts
+*.wrangler.*.json
