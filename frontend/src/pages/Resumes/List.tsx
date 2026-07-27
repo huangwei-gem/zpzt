@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { Table, Button, Space, message, Tag, Modal, Tooltip, Typography, Form, Select, Upload, Input, DatePicker, InputNumber, Card, Row, Col, Checkbox, Statistic, Pagination, Empty, Avatar, Badge } from 'antd';
-import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, DownloadOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, SolutionOutlined, SyncOutlined, FileTextOutlined, CheckOutlined, CloseOutlined, UserOutlined, StarOutlined, StarFilled, EnvironmentOutlined, BookOutlined, InfoCircleOutlined, EditOutlined, SettingOutlined, RobotOutlined } from '@ant-design/icons';
+import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, DownloadOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, SolutionOutlined, SyncOutlined, FileTextOutlined, CheckOutlined, CloseOutlined, UserOutlined, StarOutlined, StarFilled, EnvironmentOutlined, BookOutlined, InfoCircleOutlined, EditOutlined, SettingOutlined, RobotOutlined, CloudUploadOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
@@ -247,6 +247,10 @@ const ResumesList: React.FC = () => {
     });
   };
 
+  const RESUMES_CACHE_KEY = '_cached_resumes_data';
+  const RESUMES_CACHE_TIME_KEY = '_cached_resumes_time';
+  const CACHE_TTL = 30_000; // 30 秒内重复进入不请求
+
   const fetchResumes = async (silent = false) => {
     if (!silent) setLoading(true);
     try {
@@ -255,13 +259,29 @@ const ResumesList: React.FC = () => {
       if (searchStatus) params.status = searchStatus;
       if (searchPerson) params.responsible_person = searchPerson;
 
-      // 不再区分 role，统一显示全部
-
-      // 没有筛选条件且有缓存时直接复用
-      if (!searchName && !searchStatus && !searchPosition && loadedRef.current && dataCache.current.length > 0) {
-        setData(dataCache.current);
-        if (!silent) setLoading(false);
-        return;
+      // 没有任何筛选条件时尝试缓存（有任一筛选条件则跳过缓存）
+      if (!searchName && !searchStatus && !searchPerson && !searchPosition) {
+        const cachedTime = sessionStorage.getItem(RESUMES_CACHE_TIME_KEY);
+        const now = Date.now();
+        if (cachedTime && (now - parseInt(cachedTime)) < CACHE_TTL) {
+          const cachedRaw = sessionStorage.getItem(RESUMES_CACHE_KEY);
+          if (cachedRaw) {
+            try {
+              const cached = JSON.parse(cachedRaw);
+              setData(cached);
+              dataCache.current = cached;
+              loadedRef.current = true;
+              if (!silent) setLoading(false);
+              return cached;
+            } catch { /* 缓存损坏，忽略 */ }
+          }
+        }
+        // 内存缓存（页面内切 tab 回）
+        if (loadedRef.current && dataCache.current.length > 0) {
+          setData(dataCache.current);
+          if (!silent) setLoading(false);
+          return;
+        }
       }
 
       const res = await request.get('/resumes', { params });
@@ -274,17 +294,24 @@ const ResumesList: React.FC = () => {
       dataCache.current = res;
       loadedRef.current = true;
 
+      // 没有任何筛选条件时才写缓存
+      if (!searchName && !searchStatus && !searchPerson && !searchPosition) {
+        try {
+          sessionStorage.setItem(RESUMES_CACHE_KEY, JSON.stringify(res));
+          sessionStorage.setItem(RESUMES_CACHE_TIME_KEY, String(Date.now()));
+        } catch { /* storage 满忽略 */ }
+      }
+
       // 后台触发 PDF 缓存（静默执行，不阻塞展示）
       request.post('/resumes/cache-files').catch(() => {});
 
-      // 检查是否有需要自动评估的简历（无 ai_evaluation 且非仅飞书导入时触发）
+      // 检查是否有需要自动评估的简历（无 ai_evaluation 时触发，仅首次加载）
       const noEval = res.filter((r: any) => !r.ai_evaluation);
-      if (noEval.length > 0 && !silent) {
+      if (noEval.length > 0 && !silent && !loadedRef.current) {
         console.log(`[AutoEval] 发现 ${noEval.length} 份简历无评估，自动触发评估...`);
         request.post('/resumes/auto-evaluate-all', {}).then((evalRes) => {
           if (evalRes.evaluated > 0) {
             message.success(`自动评估完成：成功 ${evalRes.evaluated} 份，跳过 ${evalRes.skipped} 份`);
-            // 重新加载数据
             fetchResumes(true);
           }
         }).catch((err) => {
@@ -378,7 +405,14 @@ const ResumesList: React.FC = () => {
   }, []);
 
   const handleSearch = () => {
+    console.log('[handleSearch] 点击搜索按钮，当前筛选条件:', { searchName, searchStatus, searchPerson, searchPosition });
+    // 搜索时清除所有缓存，确保重新请求 API
+    sessionStorage.removeItem(RESUMES_CACHE_KEY);
+    sessionStorage.removeItem(RESUMES_CACHE_TIME_KEY);
+    dataCache.current = [];
+    loadedRef.current = false;
     setCardPage(1);
+    console.log('[handleSearch] 缓存已清除，准备调用 fetchResumes');
     fetchResumes();
   };
 
@@ -800,9 +834,11 @@ const ResumesList: React.FC = () => {
       <Space size="small" wrap>
         <Tooltip title="预览"><Button type="text" size="small" icon={<FileTextOutlined style={{ color: '#6366F1' }} />} onClick={() => handlePreview(record)} /></Tooltip>
         <Tooltip title="下载"><Button type="text" size="small" icon={<DownloadOutlined style={{ color: '#22C55E' }} />} onClick={() => handleDownload(record)} /></Tooltip>
+        <Tooltip title="AI评估"><Button type="text" size="small" icon={<ThunderboltOutlined style={{ color: '#faad14' }} />} /></Tooltip>
+        <Tooltip title="关注"><Button type="text" size="small" icon={<StarOutlined style={{ color: '#faad14' }} />} /></Tooltip>
         {isPending && (
           <>
-            <Button type="primary" size="small" icon={<CheckOutlined style={{ color: '#52c41a' }} />} onClick={() => handleApproveToTalentPool(record)}>入库</Button>
+            <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => handleApproveToTalentPool(record)}>入库</Button>
             <Button size="small" icon={<CloseOutlined />} onClick={() => handleReject(record)}>不入库</Button>
           </>
         )}
@@ -930,87 +966,45 @@ const ResumesList: React.FC = () => {
           <Text type="secondary" style={{ fontSize: 13 }}>管理候选人简历及面试流程</Text>
         </div>
         <Space size="small">
-          <Button size="small" icon={pollingEnabled ? <SyncOutlined spin /> : <ReloadOutlined />} onClick={() => fetchResumes()}>
-            {pollingEnabled ? '解析中...' : '从飞书导入'}
-          </Button>
-          <Button size="small" icon={<RobotOutlined />} onClick={handleAutoEvaluateAll}
-            title="从PDF提取文本 → AI评分维度 → 保存显示（跳过已有评估的简历）">
-            AI自动评估
-          </Button>
-          <Button size="small" icon={<RobotOutlined />} onClick={handleBatchAIEvaluate}>
-            AI批量评估
-          </Button>
-          <Button size="small" icon={<SyncOutlined />} onClick={handleBatchReparse}>
-            全部重解析
-          </Button>
-          <Button size="small" danger icon={<CloseCircleOutlined />} onClick={handleClearRejected}>
-            清除已淘汰
-          </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={handleUploadClick}>上传简历</Button>
           <Button icon={<DownloadOutlined />} onClick={() => setBossImportOpen(true)}>BOSS导入</Button>
+          <Button icon={<CloudUploadOutlined />} onClick={() => {
+            Modal.info({
+              title: '飞书导入',
+              content: (
+                <div>
+                  <p>请先登录飞书后台，在「多维表格」中导出简历数据为 Excel 文件，然后使用「BOSS导入」功能上传。</p>
+                  <p>如需直接从飞书同步，请先配置飞书多维表格集成。</p>
+                </div>
+              ),
+              okText: '知道了',
+            });
+          }}>飞书导入</Button>
+          <Button icon={<ReloadOutlined />} onClick={() => { fetchResumes(); fetchPositions(); }}>刷新数据</Button>
+          <Button icon={<RobotOutlined />} onClick={handleAutoEvaluateAll}>AI 工具</Button>
         </Space>
       </div>
 
-      {/* 统计卡片 */}
-      <Row gutter={12} style={{ marginBottom: 16 }}>
-        <Col span={4}>
-          <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
-            <Statistic
-              title={<span style={{ fontSize: 13 }}>总简历数</span>}
-              value={data.length}
-              suffix="份"
-              valueStyle={{ color: '#1677ff', fontSize: 22, fontWeight: 600 }}
-            />
+      {/* 统计卡片 — 指标卡片形式 */}
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={6}>
+          <Card size="small" style={{ borderRadius: 8, borderTop: '3px solid #1677ff' }}>
+            <Statistic title="总简历数" value={data.length} suffix="份" valueStyle={{ color: '#1677ff', fontWeight: 600 }} />
           </Card>
         </Col>
-        <Col span={4}>
-          <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
-            <Statistic
-              title={<span style={{ fontSize: 13 }}>简历初筛</span>}
-              value={data.filter((r: any) => r.status === 'approved' || r.status === 'rejected').length}
-              suffix="人"
-              valueStyle={{ color: '#722ed1', fontSize: 22, fontWeight: 600 }}
-            />
+        <Col span={6}>
+          <Card size="small" style={{ borderRadius: 8, borderTop: '3px solid #722ed1' }}>
+            <Statistic title="待处理" value={data.filter((r: any) => r.status === 'pending_screening').length} suffix="人" valueStyle={{ color: '#722ed1', fontWeight: 600 }} />
           </Card>
         </Col>
-        <Col span={4}>
-          <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
-            <Statistic
-              title={<span style={{ fontSize: 13 }}>面试</span>}
-              value={data.filter((r: any) => r.status === 'approved').length}
-              suffix="人"
-              valueStyle={{ color: '#52c41a', fontSize: 22, fontWeight: 600 }}
-            />
+        <Col span={6}>
+          <Card size="small" style={{ borderRadius: 8, borderTop: '3px solid #52c41a' }}>
+            <Statistic title="已入库" value={data.filter((r: any) => r.status === 'approved' || r.status === 'talent_pool').length} suffix="人" valueStyle={{ color: '#52c41a', fontWeight: 600 }} />
           </Card>
         </Col>
-        <Col span={4}>
-          <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
-            <Statistic
-              title={<span style={{ fontSize: 13 }}>Offer沟通</span>}
-              value={statsOffer}
-              suffix="人"
-              valueStyle={{ color: '#fa8c16', fontSize: 22, fontWeight: 600 }}
-            />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
-            <Statistic
-              title={<span style={{ fontSize: 13 }}>待入职</span>}
-              value={statsPendingOnboard}
-              suffix="人"
-              valueStyle={{ color: '#1677ff', fontSize: 22, fontWeight: 600 }}
-            />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
-            <Statistic
-              title={<span style={{ fontSize: 13 }}>已入职</span>}
-              value={statsCompletedOnboard}
-              suffix="人"
-              valueStyle={{ color: '#52c41a', fontSize: 22, fontWeight: 600 }}
-            />
+        <Col span={6}>
+          <Card size="small" style={{ borderRadius: 8, borderTop: '3px solid #52c41a' }}>
+            <Statistic title="已入职" value={statsCompletedOnboard} suffix="人" valueStyle={{ color: '#52c41a', fontWeight: 600 }} />
           </Card>
         </Col>
       </Row>
@@ -1105,8 +1099,6 @@ const ResumesList: React.FC = () => {
         <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {pagedData.map((record: any) => {
-              const ageText = cleanAge(record.age);
-              const genderText = cleanGender(record.gender);
               const scoreDetails = parseScoreDetail(record.ai_evaluation);
               const totalScore = scoreDetails ? calcTotalScore(scoreDetails) : null;
               const matchCount = scoreDetails?.filter(d => d.score >= 3).length || 0;
@@ -1121,8 +1113,8 @@ const ResumesList: React.FC = () => {
                   hoverable
                   onClick={() => navigate(`/resumes/${record.id}`)}
                 >
-                  {/* 顶部：复选框 + 姓名 + 状态 + 操作 */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8, minHeight: 32 }}>
+                  {/* 顶部：复选框 + 行内容（姓名 信息 岗位 状态）+ 操作按钮（与88r一致） */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, minHeight: 32, flexWrap: 'wrap' }}>
                     <Checkbox
                       checked={selectedRowKeys.includes(record.id)}
                       onChange={(e) => {
@@ -1135,11 +1127,15 @@ const ResumesList: React.FC = () => {
                       onClick={e => e.stopPropagation()}
                     />
                     <span style={{ fontWeight: 600, fontSize: 15 }}>{record.candidate_name || '未知'}</span>
-                    <span style={{ color: '#8c8c8c', fontSize: 12 }}>
-                      {[genderText, ageText, record.education, record.major].filter(Boolean).join(' · ') || '—'}
+                    <span style={{ color: '#8c8c8c', fontSize: 13 }}>
+                      {[
+                        cleanAge(record.age)?.replace('岁', '岁 · '),
+                        record.education,
+                        record.major
+                      ].filter(Boolean).join(' · ') || ''}
                     </span>
                     {record.position_applied && (
-                      <Tag style={{ margin: 0 }}>{record.standard_position || record.position_applied}</Tag>
+                      <Tag style={{ margin: 0, fontSize: 12 }}>{record.standard_position || record.position_applied}</Tag>
                     )}
                     {statusTag(record.status)}
                     <div style={{ marginLeft: 'auto' }} onClick={e => e.stopPropagation()}>
@@ -1147,37 +1143,30 @@ const ResumesList: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* 底部：AI 评估条件 — 竖排 */}
-                  {scoreDetails && scoreDetails.length > 0 && (
-                    <div style={{ marginTop: 4 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                        <span style={{ fontSize: 12, color: '#1677ff', fontWeight: 600, background: '#f0f5ff', padding: '1px 8px', borderRadius: 4 }}>
-                          AI 评估 {matchCount}/{totalDims} 符合
-                        </span>
-                        {totalScore != null && (
-                          <span style={{ fontSize: 12, color: '#8c8c8c' }}>综合分 {totalScore}</span>
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start', paddingLeft: 4 }}>
-                        {scoreDetails.map((d: any, i: number) => {
-                          const isMatch = d.score >= 3;
-                          const dimKey = `${record.id}_${i}`;
-                          return (
-                            <HoverDetail
-                              key={i}
-                              dimKey={dimKey}
-                              isMatch={isMatch}
-                              name={d.name}
-                              score={d.score}
-                              reason={d.reason}
-                            />
-                          );
-                        })}
+                  {/* 底部：AI 评估 — 圆角边框容器 */}
+                  {scoreDetails && scoreDetails.length > 0 ? (
+                    <div style={{ marginTop: 6, border: '1px solid #e8e8e8', borderRadius: 8, padding: '6px 10px', background: '#fafafa' }}>
+                      <div style={{ fontSize: 12, color: '#595959', lineHeight: '22px' }}>
+                        <span style={{ color: '#1677ff', fontWeight: 600 }}>AI 评估 {matchCount}/{totalDims} 符合</span>
+                        <span style={{ color: '#8c8c8c', marginLeft: 8 }}>综合分 {totalScore}</span>
+                        {scoreDetails.map((d: any) => (
+                          <Tooltip key={d.name} title={d.reason || `${d.name}：${d.score}/5`}>
+                            <span
+                              style={{
+                                marginLeft: 6,
+                                cursor: 'pointer',
+                                color: d.score >= 3 ? '#52c41a' : '#faad14',
+                                borderBottom: '1px dashed #d9d9d9',
+                              }}
+                            >
+                              {d.name} {d.score}/5
+                            </span>
+                          </Tooltip>
+                        ))}
                       </div>
                     </div>
-                  )}
-                  {(!scoreDetails || scoreDetails.length === 0) && (
-                    <div style={{ marginTop: 4 }}>
+                  ) : (
+                    <div style={{ marginTop: 6, border: '1px solid #f0f0f0', borderRadius: 8, padding: '6px 10px', background: '#fafafa' }}>
                       <span style={{ color: '#bfbfbf', fontSize: 12 }}>暂无 AI 评估</span>
                     </div>
                   )}
@@ -1732,7 +1721,7 @@ function DynamicPdfViewer({ pdfUrl }: { pdfUrl: string }) {
   return <Comp pdfUrl={pdfUrl} />;
 }
 
-/** 自定义 hover 浮层 — 跟随鼠标位置，不受 Ant Design Popover 布局影响 */
+/** 自定义 hover 浮层 — 用 useRef 直接操作 DOM，不触发 React 渲染，保证跟手 */
 const HoverDetail: React.FC<{
   dimKey: string;
   isMatch: boolean;
@@ -1740,28 +1729,32 @@ const HoverDetail: React.FC<{
   score: number;
   reason: string;
 }> = ({ dimKey, isMatch, name, score, reason }) => {
-  const [hover, setHover] = useState(false);
-  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [visible, setVisible] = useState(false);
+  const tooltipRef = useRef<HTMLSpanElement>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const posRef = useRef({ x: 0, y: 0 });
 
   const handleEnter = (e: React.MouseEvent) => {
     posRef.current = { x: e.clientX, y: e.clientY };
-    setPos({ x: e.clientX, y: e.clientY });
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
-      // 弹出时使用最新鼠标位置
-      setPos({ x: posRef.current.x, y: posRef.current.y });
-      setHover(true);
+      if (tooltipRef.current) {
+        tooltipRef.current.style.left = (posRef.current.x + 18) + 'px';
+        tooltipRef.current.style.top = (posRef.current.y - 10) + 'px';
+      }
+      setVisible(true);
     }, 200);
   };
   const handleMove = (e: React.MouseEvent) => {
     posRef.current = { x: e.clientX, y: e.clientY };
-    setPos({ x: e.clientX, y: e.clientY });
+    if (visible && tooltipRef.current) {
+      tooltipRef.current.style.left = (e.clientX + 18) + 'px';
+      tooltipRef.current.style.top = (e.clientY - 10) + 'px';
+    }
   };
   const handleLeave = () => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    setHover(false);
+    setVisible(false);
   };
 
   return (
@@ -1770,6 +1763,7 @@ const HoverDetail: React.FC<{
         padding: '3px 10px', borderRadius: 4, cursor: 'default',
         background: isMatch ? '#f6ffed' : '#fff2f0',
         border: `1px solid ${isMatch ? '#b7eb8f' : '#ffccc7'}`,
+        position: 'relative',
       }}
       onMouseEnter={handleEnter}
       onMouseMove={handleMove}
@@ -1784,12 +1778,13 @@ const HoverDetail: React.FC<{
       <span style={{ fontWeight: 600, color: isMatch ? '#52c41a' : '#ff4d4f', flexShrink: 0, minWidth: 20, textAlign: 'right' }}>
         {score}
       </span>
-      {hover && (
-        <span style={{
+      {/* 浮层用 DOM ref 直接设位置，不通过 React state 更新 */}
+      <span
+        ref={tooltipRef}
+        style={{
           position: 'fixed',
-          left: pos.x + 18,
-          top: pos.y - 10,
-          transform: 'translateY(-100%)',
+          left: -9999,
+          top: -9999,
           zIndex: 9999,
           maxWidth: 320,
           fontSize: 13,
@@ -1801,14 +1796,15 @@ const HoverDetail: React.FC<{
           boxShadow: '0 6px 16px rgba(0,0,0,0.12)',
           pointerEvents: 'none',
           whiteSpace: 'normal',
-        }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>{name}</div>
-          <div style={{ color: isMatch ? '#52c41a' : '#ff4d4f', fontSize: 12, marginBottom: 4 }}>
-            {isMatch ? '符合' : '不符合'}（分数：{score}）
-          </div>
-          <div style={{ color: '#595959', fontSize: 12, whiteSpace: 'pre-wrap' }}>{reason}</div>
-        </span>
-      )}
+          display: visible ? 'block' : 'none',
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>{name}</div>
+        <div style={{ color: isMatch ? '#52c41a' : '#ff4d4f', fontSize: 12, marginBottom: 4 }}>
+          {isMatch ? '符合' : '不符合'}（分数：{score}）
+        </div>
+        <div style={{ color: '#595959', fontSize: 12, whiteSpace: 'pre-wrap' }}>{reason}</div>
+      </span>
     </span>
   );
 };

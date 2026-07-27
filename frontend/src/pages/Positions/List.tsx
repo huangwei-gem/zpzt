@@ -543,13 +543,15 @@ const PositionsList: React.FC = () => {
       title: '岗位名称',
       dataIndex: 'title', 
       key: 'title',
+      width: 140,
       render: (text: string) => <span style={{ fontWeight: 500, color: '#0F172A' }}>{text}</span>
     },
-    { title: '部门', dataIndex: 'department', key: 'department', render: (v: string) => v || '-' },
+    { title: '部门', dataIndex: 'department', key: 'department', width: 120, render: (v: string) => v || '-' },
     { 
       title: '类型', 
       dataIndex: 'position_type', 
       key: 'position_type',
+      width: 60,
       render: (type: string) => {
         const config = positionTypeConfig[type] || { color: 'default', text: type };
         return <Tag color={config.color} style={{ border: 'none' }}>{config.text}</Tag>;
@@ -559,6 +561,7 @@ const PositionsList: React.FC = () => {
       title: '紧急度', 
       dataIndex: 'urgency', 
       key: 'urgency',
+      width: 70,
       render: (urgency: string) => {
         const config = urgencyConfig[urgency] || { color: 'default', text: urgency };
         return <Tag color={config.color} style={{ border: 'none' }}>{config.text}</Tag>;
@@ -568,6 +571,7 @@ const PositionsList: React.FC = () => {
       title: '状态', 
       dataIndex: 'status', 
       key: 'status',
+      width: 70,
       render: (status: string) => {
         let color = 'default';
         let text = '已关闭';
@@ -584,26 +588,28 @@ const PositionsList: React.FC = () => {
     { 
       title: '招聘进度', 
       key: 'stats',
+      width: 100,
       render: (_: any, record: Position) => renderStats(record.stats)
     },
     { 
       title: '责任人', 
       dataIndex: 'responsible_person', 
       key: 'responsible_person',
+      width: 80,
       render: (v: string) => v || <Text type="secondary">-</Text>
     },
     { 
       title: '一面面试官', 
       dataIndex: 'primary_interviewer', 
       key: 'primary_interviewer',
-      width: 110,
+      width: 90,
       render: (v: string) => v || <Text type="secondary">-</Text>
     },
     { 
       title: '二面面试官', 
       dataIndex: 'secondary_interviewer', 
       key: 'secondary_interviewer',
-      width: 110,
+      width: 90,
       render: (v: string) => v || <Text type="secondary">-</Text>
     },
     {

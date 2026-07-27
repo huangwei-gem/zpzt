@@ -1,6 +1,11 @@
 <svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="128" height="128" rx="28" fill="#0F172A"/>
-  <path d="M34 86V42H48V86H34Z" fill="#FFFFFF"/>
-  <path d="M57 86V42H73.5C88.5 42 99 51.2 99 64C99 76.8 88.5 86 73.5 86H57ZM71 74H73.2C80.4 74 85 70.1 85 64C85 57.9 80.4 54 73.2 54H71V74Z" fill="#38BDF8"/>
-  <path d="M26 96H102" stroke="#38BDF8" stroke-width="6" stroke-linecap="round"/>
+  <rect width="128" height="128" rx="28" fill="#E1251B"/>
+  <!-- 天鹅身体 -->
+  <ellipse cx="64" cy="78" rx="28" ry="20" fill="#FFFFFF"/>
+  <!-- 天鹅脖子和头 -->
+  <path d="M64 78 C52 68 46 50 52 38 C56 30 64 30 64 38 C64 30 72 30 76 38 C82 50 76 68 64 78Z" fill="#FFFFFF"/>
+  <!-- 天鹅眼睛 -->
+  <circle cx="64" cy="42" r="3" fill="#E1251B"/>
+  <!-- 天鹅翅膀 -->
+  <path d="M40 72 C36 66 36 58 42 54 C48 50 56 56 52 62 C56 58 62 56 64 60 C56 64 48 72 40 72Z" fill="#FFD700" opacity="0.8"/>
 </svg>

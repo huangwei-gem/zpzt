@@ -119,7 +119,7 @@ const AppLayout: React.FC = () => {
           ? '邮件设置'
           : location.pathname.startsWith('/workflows/')
             ? '工作流编辑'
-            : menuItems.find(item => item.key === location.pathname)?.label || 'AI 面试助手';
+            : menuItems.find(item => item.key === location.pathname)?.label || '天鹅到家';
 
   const userMenuItems: any[] = [
     {
@@ -171,13 +171,15 @@ const AppLayout: React.FC = () => {
           display: 'flex', 
           alignItems: 'center', 
           justifyContent: 'center',
+          gap: 8,
           color: '#0F172A',
           fontSize: '20px',
           fontWeight: 700,
           letterSpacing: '-0.025em',
           borderBottom: '1px solid #f0f0f0'
         }}>
-          <span style={{ color: '#3B82F6' }}>AI</span> Interview
+          <img src="/swan.svg" alt="天鹅到家" style={{ width: 28, height: 28 }} />
+          <span style={{ color: '#E1251B' }}>天鹅到家</span>
         </div>
         <Menu
           theme="light"

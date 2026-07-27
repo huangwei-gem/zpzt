@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Table, Button, Space, message, Tag, Modal, Select, Input, Form,
   Radio, Typography, Card, Tooltip, DatePicker
@@ -54,7 +54,67 @@ interface MergedRow {
   interviewer: string;
   primary_interviewer: string;
   secondary_interviewer: string;
+  ai_evaluation: string;          // AI评估文本，用于能力维度展示
 }
+
+/** 从 ai_evaluation 中解析能力维度评分明细 */
+const parseScoreDetail = (aiEval: any): { name: string; score: number; reason: string }[] | null => {
+  // === 格式1：JSON 对象（来自 D1 ai_evaluation） ===
+  if (aiEval && typeof aiEval === 'object' && !Array.isArray(aiEval)) {
+    if (Array.isArray(aiEval.dimensions)) return aiEval.dimensions;
+  }
+  if (typeof aiEval !== 'string' || !aiEval) return null;
+
+  // === 格式2：JSON 双重转义字符串 ===
+  if (aiEval.startsWith('{')) {
+    try {
+      const outer = JSON.parse(aiEval);
+      if (outer.summary && typeof outer.summary === 'string') {
+        try {
+          const inner = JSON.parse(outer.summary);
+          if (Array.isArray(inner.dimensions) && inner.dimensions.length > 0) {
+            return inner.dimensions.map((d: any) => ({
+              name: d.name || '',
+              score: d.score ?? 0,
+              reason: d.reason || '',
+            }));
+          }
+        } catch (_innerErr) {
+          const dims: { name: string; score: number; reason: string }[] = [];
+          const re = /"name"\s*:\s*"([^"]*?)"\s*,\s*"score"\s*:\s*(\d+(?:\.\d+)?)\s*,/g;
+          let m: RegExpExecArray | null;
+          while ((m = re.exec(outer.summary)) !== null) {
+            dims.push({ name: m[1], score: parseFloat(m[2]), reason: '' });
+          }
+          if (dims.length > 0) return dims;
+        }
+      }
+    } catch (_outerErr) {}
+  }
+
+  // === 格式3：文本格式（能力维度匹配） ===
+  if (aiEval.includes('能力维度匹配')) {
+    const dimSection = aiEval.match(/能力维度匹配\*{0,2}[：:]\s*([\s\S]*?)(?=\n(?!  - )|$)/);
+    if (!dimSection) return null;
+    const lines = dimSection[1].split('\n').filter(l => l.includes('**'));
+    const results: { name: string; score: number; reason: string }[] = [];
+    for (const line of lines) {
+      const m = line.match(/\*\*(.+?)[：:]\s*(\d+(?:\.\d+)?)\/5分\*{0,2}[。.]*\s*依据\*{0,2}[：:](.*)/);
+      if (m) {
+        results.push({ name: m[1].trim(), score: parseFloat(m[2]), reason: m[3].trim() });
+      } else {
+        // 变体：**名称：X/5分。依据**：理由
+        const m2 = line.match(/\*\*(.+?)[：:]\s*(\d+(?:\.\d+)?)\/5分[。.]*\s*依据\*\*[：:](.*)/);
+        if (m2) {
+          results.push({ name: m2[1].trim(), score: parseFloat(m2[2]), reason: m2[3].trim() });
+        }
+      }
+    }
+    return results.length > 0 ? results : null;
+  }
+
+  return null;
+};
 
 const InterviewsList: React.FC = () => {
   const { user } = useAuth();
@@ -127,6 +187,7 @@ const InterviewsList: React.FC = () => {
           interviewer: matchedIv?.interviewer || '',
           primary_interviewer: matchedIv?.primary_interviewer || '',
           secondary_interviewer: matchedIv?.secondary_interviewer || '',
+          ai_evaluation: c.ai_evaluation || '',
         };
       });
 
@@ -290,6 +351,32 @@ const InterviewsList: React.FC = () => {
     { title: '学历', dataIndex: 'education', key: 'education', width: 80,
       render: (v: string) => v || '-' },
     { title: '城市', dataIndex: 'city', key: 'city', width: 80 },
+    {
+      title: 'AI 评估', key: 'ai_evaluation', width: 300,
+      render: (_: any, r: MergedRow) => {
+        if (!r.ai_evaluation) return <span style={{ color: '#ccc' }}>暂无</span>;
+        const scoreDetails = parseScoreDetail(r.ai_evaluation);
+        if (!scoreDetails || scoreDetails.length === 0) return <span style={{ color: '#ccc' }}>暂无评估维度</span>;
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
+            {scoreDetails.map((d, i) => {
+              const dimKey = `${r.id}_${i}`;
+              const isMatch = d.score >= 3;
+              return (
+                <HoverDetail
+                  key={dimKey}
+                  dimKey={dimKey}
+                  isMatch={isMatch}
+                  name={d.name}
+                  score={d.score}
+                  reason={d.reason}
+                />
+              );
+            })}
+          </div>
+        );
+      }
+    },
     {
       title: '候选人状态', key: 'talent_status', width: 100,
       render: (_: any, r: MergedRow) => {
@@ -569,6 +656,86 @@ const InterviewsList: React.FC = () => {
         )}
       </Modal>
     </div>
+  );
+};
+
+/** 自定义 hover 浮层 — 跟随鼠标位置，不受 Ant Design Popover 布局影响 */
+const HoverDetail: React.FC<{
+  dimKey: string;
+  isMatch: boolean;
+  name: string;
+  score: number;
+  reason: string;
+}> = ({ dimKey, isMatch, name, score, reason }) => {
+  const [hover, setHover] = useState(false);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const posRef = useRef({ x: 0, y: 0 });
+
+  const handleEnter = (e: React.MouseEvent) => {
+    posRef.current = { x: e.clientX, y: e.clientY };
+    setPos({ x: e.clientX, y: e.clientY });
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      setPos({ x: posRef.current.x, y: posRef.current.y });
+      setHover(true);
+    }, 200);
+  };
+  const handleMove = (e: React.MouseEvent) => {
+    posRef.current = { x: e.clientX, y: e.clientY };
+    setPos({ x: e.clientX, y: e.clientY });
+  };
+  const handleLeave = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setHover(false);
+  };
+
+  return (
+    <span
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12,
+        padding: '3px 10px', borderRadius: 4, cursor: 'default',
+        background: isMatch ? '#f6ffed' : '#fff2f0',
+        border: `1px solid ${isMatch ? '#b7eb8f' : '#ffccc7'}`,
+      }}
+      onMouseEnter={handleEnter}
+      onMouseMove={handleMove}
+      onMouseLeave={handleLeave}
+    >
+      <span style={{ width: 16, textAlign: 'center', flexShrink: 0 }}>
+        {isMatch ? '✅' : '❌'}
+      </span>
+      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 200 }}>
+        {name}
+      </span>
+      <span style={{ fontWeight: 600, color: isMatch ? '#52c41a' : '#ff4d4f', flexShrink: 0, minWidth: 20, textAlign: 'right' }}>
+        {score}
+      </span>
+      {hover && (
+        <span style={{
+          position: 'fixed',
+          left: pos.x + 18,
+          top: pos.y - 10,
+          transform: 'translateY(-100%)',
+          zIndex: 9999,
+          maxWidth: 320,
+          fontSize: 13,
+          lineHeight: 1.6,
+          background: '#fff',
+          border: '1px solid #d9d9d9',
+          borderRadius: 8,
+          padding: '10px 14px',
+          boxShadow: '0 6px 16px rgba(0,0,0,0.12)',
+          pointerEvents: 'none',
+          whiteSpace: 'normal',
+        }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>{name}</div>
+          <div style={{ color: isMatch ? '#52c41a' : '#ff4d4f', fontSize: 12, marginBottom: 4 }}>
+            {isMatch ? '符合' : '不符合'}（分数：{score}）
+          </div>
+          <div style={{ color: '#595959', fontSize: 12, whiteSpace: 'pre-wrap' }}>{reason}</div>
+        </span>
+      )}
+    </span>
   );
 };
 

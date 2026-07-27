@@ -216,7 +216,7 @@ const PublicJobDetail: React.FC = () => {
         </Card>
         
         <div style={{ textAlign: 'center', marginTop: 32, color: '#94A3B8' }}>
-          <Text type="secondary">Powered by AI Interview System</Text>
+          <Text type="secondary">天鹅到家 · 智能招聘系统</Text>
         </div>
       </div>
     </div>

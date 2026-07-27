@@ -43,9 +43,4 @@ jobs:
           accountId: 66ff602626d5f02e290d70c920955171
           command: pages deploy frontend/dist --project-name ai-interview --branch main
 
-      - name: Deploy to hiring-platform
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: 66ff602626d5f02e290d70c920955171
-          command: pages deploy frontend/dist --project-name hiring-platform --branch main
+
