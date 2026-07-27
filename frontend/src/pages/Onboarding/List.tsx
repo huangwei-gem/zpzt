@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  Card, Table, Button, Space, Tag, Modal, Form, Input, DatePicker,
-  Select, Switch, message, Popconfirm, Drawer, Descriptions, Row, Col, Statistic
+  Table, Button, Space, Tag, Modal, Form, Input, DatePicker,
+  Select, Switch, message, Popconfirm, Drawer, Descriptions, Row, Col, Statistic, Typography
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined,
@@ -10,6 +10,7 @@ import {
 import request from '../../utils/request';
 import dayjs from 'dayjs';
 
+const { Title, Text } = Typography;
 const { TextArea } = Input;
 const { Option } = Select;
 
@@ -118,20 +119,38 @@ const OnboardingList: React.FC = () => {
 
   return (
     <div>
-      <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col span={6}><Card><Statistic title="入职总数" value={data.length} /></Card></Col>
-        <Col span={6}><Card><Statistic title="待入职" value={data.filter(r => r.status === 'pending').length} /></Card></Col>
-        <Col span={6}><Card><Statistic title="入职中" value={data.filter(r => r.status === 'in_progress').length} /></Card></Col>
-        <Col span={6}><Card><Statistic title="已完成" value={data.filter(r => r.status === 'completed').length} /></Card></Col>
+      <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+        <div>
+          <Title level={2} style={{ margin: 0, fontWeight: 700 }}>入职管理</Title>
+          <Text type="secondary">管理候选人入职流程及员工信息</Text>
+        </div>
+        <Space>
+          <Button icon={<ReloadOutlined />} onClick={fetchData} size="large" style={{ borderRadius: '8px' }}>刷新</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate} size="large" style={{ borderRadius: '8px' }}>新增入职</Button>
+        </Space>
+      </div>
+
+      <Row gutter={16} style={{ marginBottom: 24 }}>
+        <Col span={6}><div style={{ background: '#F8FAFC', padding: '20px 24px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+          <Text type="secondary" style={{ fontSize: 13 }}>入职总数</Text>
+          <div style={{ fontSize: 28, fontWeight: 600, color: '#0F172A', marginTop: 4 }}>{data.length}</div>
+        </div></Col>
+        <Col span={6}><div style={{ background: '#F8FAFC', padding: '20px 24px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+          <Text type="secondary" style={{ fontSize: 13 }}>待入职</Text>
+          <div style={{ fontSize: 28, fontWeight: 600, color: '#F59E0B', marginTop: 4 }}>{data.filter(r => r.status === 'pending').length}</div>
+        </div></Col>
+        <Col span={6}><div style={{ background: '#F8FAFC', padding: '20px 24px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+          <Text type="secondary" style={{ fontSize: 13 }}>入职中</Text>
+          <div style={{ fontSize: 28, fontWeight: 600, color: '#3B82F6', marginTop: 4 }}>{data.filter(r => r.status === 'in_progress').length}</div>
+        </div></Col>
+        <Col span={6}><div style={{ background: '#F8FAFC', padding: '20px 24px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+          <Text type="secondary" style={{ fontSize: 13 }}>已完成</Text>
+          <div style={{ fontSize: 28, fontWeight: 600, color: '#10B981', marginTop: 4 }}>{data.filter(r => r.status === 'completed').length}</div>
+        </div></Col>
       </Row>
-      <Card title={<span><HomeOutlined /> 入职管理</span>}
-        extra={<Space>
-          <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>新增入职</Button>
-        </Space>}>
-        <Table dataSource={data} columns={columns} rowKey="id" loading={loading}
-          scroll={{ x: 1200 }} pagination={{ pageSize: 10, showSizeChanger: true }} />
-      </Card>
+
+      <Table dataSource={data} columns={columns} rowKey="id" loading={loading}
+        scroll={{ x: 1200 }} pagination={{ pageSize: 10, showSizeChanger: true }} />
       <Modal title={editing ? '编辑入职记录' : '新增入职记录'} open={modalVisible}
         onCancel={() => setModalVisible(false)} onOk={handleSubmit} width={720} destroyOnClose>
         <div style={{ padding: '8px 0' }}>
