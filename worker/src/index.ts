@@ -1846,8 +1846,15 @@ app.post('/api/interviews/create-from-talent', authMiddleware, async (c) => {
     const notificationResults: string[] = [];
     if (interviewerOpenIds.length > 0) {
       try {
-        const token = await getFeishuToken(c.env);
         const operatorName = currentUser?.name || currentUser?.email || '系统管理员';
+        // 先查当前用户的 feishu_token
+        let preferredToken: string | undefined;
+        if (currentUser?.email) {
+          const meRow = await c.env.DB.prepare(
+            "SELECT feishu_token FROM users WHERE email = ? AND feishu_token IS NOT NULL AND feishu_token != ''"
+          ).bind(currentUser.email).first() as any;
+          if (meRow?.feishu_token) preferredToken = meRow.feishu_token;
+        }
         for (const openId of interviewerOpenIds) {
           // 构建卡片内容
           const cardElements: any[] = [
@@ -1876,20 +1883,11 @@ app.post('/api/interviews/create-from-talent', authMiddleware, async (c) => {
             elements: cardElements,
           };
 
-          const resp = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-            body: JSON.stringify({
-              receive_id: openId,
-              msg_type: 'interactive',
-              content: JSON.stringify(cardContent),
-            }),
-          });
-          const result: any = await resp.json();
-          if (result.code === 0) {
+          try {
+            await sendFeishuMessageWithFallback(c.env, openId, cardContent, preferredToken);
             notificationResults.push(`✅ ${openId} 发送成功`);
-          } else {
-            notificationResults.push(`❌ ${openId} 发送失败: ${result.code} ${JSON.stringify(result.msg || result)}`);
+          } catch (e: any) {
+            notificationResults.push(`❌ ${openId} 发送失败: ${e.message}`);
           }
         }
       } catch (e: any) {
@@ -2329,9 +2327,8 @@ app.post('/api/resumes/cache-files', authMiddleware, async (c) => {
 
       if (!fileToken) { failed++; continue; }
 
-      // 尝试下载
-      const downloadUrl = tmpUrl || `https://ywwlaii6ga7.feishu.cn/space/api/box/stream/download/all/${fileToken}?mount_node_token=${FEISHU_CONFIG.appToken}&mount_point=bitable`;
-      const resp = await downloadFeishuAttachment(c.env, fileToken, downloadUrl);
+      // 尝试下载（传 tmpUrl 以便直接走预签名链接）
+      const resp = await downloadFeishuAttachment(c.env, fileToken, tmpUrl);
       if (resp) {
         const blob = await resp.clone().arrayBuffer();
         const b64 = bufToB64(blob);
@@ -3472,6 +3469,38 @@ app.post('/api/settings/interviewers/notify-all', authMiddleware, async (c) => {
   }
 });
 
+// ---- 评估维度配置（系统级） ----
+async function ensureEvalDimsColumn(db: D1Database): Promise<void> {
+  try { await db.prepare("ALTER TABLE system_configs ADD COLUMN evaluation_dimensions TEXT DEFAULT '[]'").run(); } catch { /* 列已存在 */ }
+}
+
+app.get('/api/settings/evaluation-dimensions', authMiddleware, async (c) => {
+  try {
+    await ensureEvalDimsColumn(c.env.DB);
+    const row = await c.env.DB.prepare('SELECT evaluation_dimensions FROM system_configs ORDER BY updated_at DESC LIMIT 1').first() as any;
+    if (!row?.evaluation_dimensions) return c.json([]);
+    try { return c.json(JSON.parse(row.evaluation_dimensions)); }
+    catch { return c.json([]); }
+  } catch { return c.json([]); }
+});
+
+app.put('/api/settings/evaluation-dimensions', authMiddleware, async (c) => {
+  try {
+    await ensureEvalDimsColumn(c.env.DB);
+    const body = await c.req.json();
+    const items = JSON.stringify(body.items || []);
+    const existing = await c.env.DB.prepare('SELECT id FROM system_configs ORDER BY updated_at DESC LIMIT 1').first() as any;
+    if (existing?.id) {
+      await c.env.DB.prepare('UPDATE system_configs SET evaluation_dimensions = ?, updated_at = ? WHERE id = ?').bind(items, now(), existing.id).run();
+    } else {
+      await c.env.DB.prepare('INSERT INTO system_configs (id, evaluation_dimensions, updated_at) VALUES (?, ?, ?)').bind(uuid(), items, now()).run();
+    }
+    return c.json({ ok: true });
+  } catch (e: any) {
+    return c.json({ detail: '保存失败: ' + e.message }, 500);
+  }
+});
+
 // ==================== Public Routes ====================
 
 app.get('/api/positions/:id', async (c) => {
@@ -4140,7 +4169,14 @@ async function getInterviewerOpenId(env: Env, name: string): Promise<string> {
   return '';
 }
 
+// 飞书 tenant_access_token 缓存（模块级，Worker isolate 内共享）
+const feishuTokenCache: { token: string; expiresAt: number } = { token: '', expiresAt: 0 };
+
 async function getFeishuToken(env: Env): Promise<string> {
+  // 缓存有效期内直接返回（缓存在 Worker 实例内，避免每次请求都重新获取）
+  if (feishuTokenCache.token && Date.now() < feishuTokenCache.expiresAt) {
+    return feishuTokenCache.token;
+  }
   const appId = env.FEISHU_APP_ID || FEISHU_CONFIG.appId;
   const appSecret = env.FEISHU_APP_SECRET || FEISHU_CONFIG.appSecret;
   const resp = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
@@ -4152,188 +4188,171 @@ async function getFeishuToken(env: Env): Promise<string> {
   if (!data.tenant_access_token) {
     throw new Error(`Feishu auth failed: ${JSON.stringify(data)}`);
   }
+  // 缓存 token，按 expire 的 85% 时间刷新（默认 7200s）
+  const ttl = (data.expire || 7200) * 850; // ms
+  feishuTokenCache.token = data.tenant_access_token;
+  feishuTokenCache.expiresAt = Date.now() + ttl;
   return data.tenant_access_token;
 }
 
-// 通过飞书 API 下载 Bitable 附件
-async function downloadFeishuAttachment(env: Env, fileToken: string, feishuDownloadUrl?: string): Promise<Response | null> {
+/** 获取数据库中任意一个有效用户 access_token（用于发飞书消息等需要用户授权的操作） */
+async function getAnyUserFeishuToken(env: Env): Promise<string | null> {
   try {
-    const token = await getFeishuToken(env);
+    const row = await env.DB.prepare(
+      "SELECT feishu_token FROM users WHERE feishu_token IS NOT NULL AND feishu_token != '' LIMIT 1"
+    ).first() as any;
+    return row?.feishu_token || null;
+  } catch { return null; }
+}
 
-    // 方法0：如果有 tmp_url（预签名临时URL），直接尝试不鉴权下载
-    if (feishuDownloadUrl && !feishuDownloadUrl.includes('box/stream/download/all')) {
-      const tmpResp = await fetch(feishuDownloadUrl, {
+/** 带 fallback 的消息发送：优先用 user_access_token，失败则用 tenant_access_token */
+async function sendFeishuMessageWithFallback(
+  env: Env,
+  openId: string,
+  cardContent: any,
+  preferredToken?: string
+): Promise<void> {
+  // 尝试顺序：
+  // 1. 外部传入的 preferredToken（如当前登录用户的 feishu_token）
+  // 2. 数据库中任意用户的 feishu_token
+  // 3. 最终 fallback：tenant_access_token
+  
+  const tokensToTry: string[] = [];
+  if (preferredToken) tokensToTry.push(preferredToken);
+  const dbToken = await getAnyUserFeishuToken(env);
+  if (dbToken && !tokensToTry.includes(dbToken)) tokensToTry.push(dbToken);
+  
+  // 最后一手：tenant_access_token
+  let lastError: Error | null = null;
+  
+  if (tokensToTry.length > 0) {
+    for (const token of tokensToTry) {
+      try {
+        const resp = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            receive_id: openId,
+            msg_type: 'interactive',
+            content: JSON.stringify(cardContent),
+          }),
+        });
+        const data: any = await resp.json();
+        if (data.code === 0) return; // 成功
+        if (data.code === 99991677) {
+          // token 过期，继续尝试下一个
+          lastError = new Error(`token 过期(${data.code}): ${JSON.stringify(data.msg || data)}`);
+          continue;
+        }
+        // 其他错误直接抛
+        throw new Error(`发送消息失败(${data.code}): ${JSON.stringify(data.msg || data)}`);
+      } catch (e: any) {
+        if (e.message.includes('99991677') || e.message.includes('token 过期')) {
+          lastError = e;
+          continue;
+        }
+        throw e;
+      }
+    }
+  }
+  
+  // 所有 user_access_token 都失败，尝试 tenant_access_token
+  try {
+    const tenantToken = await getFeishuToken(env);
+    await sendFeishuMessageToUser(tenantToken, openId, cardContent);
+    console.log(`[sendFeishuMessageWithFallback] 使用 tenant_access_token 发送成功`);
+  } catch (e: any) {
+    throw lastError || new Error(`所有 token 都失败: ${e.message}`);
+  }
+}
+
+// 通过飞书 API 下载 Bitable 附件（简化版，优先走预签名 URL）
+async function downloadFeishuAttachment(env: Env, fileToken: string, tmpUrl?: string): Promise<Response | null> {
+  try {
+    // 方法A：如果有 tmp_url（预签名临时URL），直接下载（无需鉴权）
+    if (tmpUrl) {
+      const resp = await fetch(tmpUrl, {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
         redirect: 'follow',
       });
-      if (tmpResp.ok) {
-        const ct = tmpResp.headers.get('Content-Type') || '';
-        if (ct && !ct.includes('pdf') && !ct.includes('octet-stream') && !ct.includes('binary')) {
-          console.error(`[FeishuAPI] 方法0返回非PDF内容: ${ct}，跳过`);
-        } else {
-          const headers = new Headers({
-            'Content-Type': ct || 'application/pdf',
-            'Content-Disposition': 'inline; filename="resume.pdf"',
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'public, max-age=3600',
+      if (resp.ok) {
+        const ct = resp.headers.get('Content-Type') || '';
+        // 接受 PDF / octet-stream / binary 内容
+        if (ct.includes('pdf') || ct.includes('octet-stream') || ct.includes('binary') || ct.includes('application/') || !ct) {
+          return new Response(resp.body, {
+            status: 200,
+            headers: {
+              'Content-Type': ct || 'application/pdf',
+              'Content-Disposition': 'inline; filename="resume.pdf"',
+              'Access-Control-Allow-Origin': '*',
+              'Cache-Control': 'public, max-age=3600',
+            },
           });
-          return new Response(tmpResp.body, { status: 200, headers });
         }
+        console.error(`[FeishuAPI] tmp_url 返回非PDF内容: ${ct?.substring(0, 100)}，继续尝试其他方法`);
+      } else {
+        console.error(`[FeishuAPI] tmp_url 下载失败 status=${resp.status}`);
       }
     }
 
-    // 方法1：用飞书 Open API 的 Drive 下载接口（POST）
-    // 设置 Accept: application/json 让 API 返回 JSON 而不是 302 重定向
+    // 方法B：用 Drive API 的 POST 模式获取临时下载链接
+    const token = await getFeishuToken(env);
     const postResp = await fetch(
       `https://open.feishu.cn/open-apis/drive/v1/medias/${fileToken}/download`,
       {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-        redirect: 'manual',  // 不自动跟随重定向，先看 JSON
-      }
-    );
-    const postBody = await postResp.text();
-    try {
-      const bodyJson = JSON.parse(postBody);
-      if (bodyJson.code === 0 && bodyJson.data?.tmp_download_urls?.[0]?.tmp_download_url) {
-        const tmpUrl = bodyJson.data.tmp_download_urls[0].tmp_download_url;
-        // 用临时 URL 下载实际的 PDF 文件
-        const fileResp = await fetch(tmpUrl, {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-          redirect: 'follow',
-        });
-        if (fileResp.ok) {
-          const fct = fileResp.headers.get('Content-Type') || 'application/pdf';
-          // 缓存到 D1（如果外层调用需要）
-          const headers = new Headers({
-            'Content-Type': fct,
-            'Content-Disposition': 'inline; filename="resume.pdf"',
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'public, max-age=3600',
-          });
-          return new Response(fileResp.body, { status: 200, headers });
-        }
-      }
-    } catch {}  // JSON 解析失败就继续下一个方法
-
-    // 方法2：Open API GET 方式（同样加 Accept: application/json 防止重定向）
-    const getResp = await fetch(
-      `https://open.feishu.cn/open-apis/drive/v1/medias/${fileToken}/download`,
-      {
-        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
         redirect: 'manual',
       }
     );
-    const getBody = await getResp.text();
-    try {
-      const bodyJson = JSON.parse(getBody);
-      if (bodyJson.code === 0 && bodyJson.data?.tmp_download_urls?.[0]?.tmp_download_url) {
-        const tmpUrl = bodyJson.data.tmp_download_urls[0].tmp_download_url;
-        const fileResp = await fetch(tmpUrl, {
+    if (postResp.ok) {
+      const postData: any = await postResp.json();
+      if (postData.code === 0 && postData.data?.tmp_download_urls?.[0]?.tmp_download_url) {
+        const dlUrl = postData.data.tmp_download_urls[0].tmp_download_url;
+        const fileResp = await fetch(dlUrl, {
           headers: { 'User-Agent': 'Mozilla/5.0' },
           redirect: 'follow',
         });
         if (fileResp.ok) {
-          const fct = fileResp.headers.get('Content-Type') || 'application/pdf';
-          const headers = new Headers({
-            'Content-Type': fct,
-            'Content-Disposition': 'inline; filename="resume.pdf"',
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'public, max-age=3600',
-          });
-          return new Response(fileResp.body, { status: 200, headers });
-        }
-      }
-    } catch {}
-
-    // 方法3：用 tenant_access_token 调飞书内部下载 URL
-    if (feishuDownloadUrl) {
-      const internalResp = await fetch(feishuDownloadUrl, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Referer': `https://ywwlaii6ga7.feishu.cn/`,
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        },
-        redirect: 'follow',
-      });
-      if (internalResp.ok) {
-        const ct = internalResp.headers.get('Content-Type') || '';
-        if (ct && !ct.includes('pdf') && !ct.includes('octet-stream') && !ct.includes('binary')) {
-          console.error(`[FeishuAPI] 方法3返回非PDF内容: ${ct}，跳过`);
-        } else {
-          const headers = new Headers({
-            'Content-Type': ct || 'application/pdf',
-            'Content-Disposition': 'inline; filename="resume.pdf"',
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'public, max-age=3600',
-          });
-          return new Response(internalResp.body, { status: 200, headers });
-        }
-      }
-      const errText = await internalResp.text().catch(() => '');
-      console.error(`[FeishuAPI] internal download status=${internalResp.status} body=${errText.substring(0, 500)}`);
-
-      // 方法3b：仅当 401 时，尝试带 extra 参数的完整 URL
-      if (internalResp.status === 401 && feishuDownloadUrl.includes('/download/all/')) {
-        // 有些飞书环境需要 extra 参数和 mount_node_token 才能通过 box API 鉴权
-        const extraEncoded = encodeURIComponent(JSON.stringify({
-          bitablePerm: { tableId: '', attachments: {} }
-        }));
-        const altUrl = feishuDownloadUrl.includes('?')
-          ? feishuDownloadUrl + '&extra=' + extraEncoded
-          : feishuDownloadUrl + '?extra=' + extraEncoded;
-        const altResp = await fetch(altUrl, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Referer': 'https://ywwlaii6ga7.feishu.cn/',
-          },
-          redirect: 'follow',
-        });
-        if (altResp.ok) {
-          const ct = altResp.headers.get('Content-Type') || '';
-          // 只返回 PDF / 二进制内容，跳过 JSON / HTML
-          if (ct && !ct.includes('pdf') && !ct.includes('octet-stream') && !ct.includes('binary')) {
-            console.error(`[FeishuAPI] 方法3b返回非PDF内容: ${ct}，跳过`);
-          } else {
-            const headers = new Headers({
-              'Content-Type': ct || 'application/pdf',
+          return new Response(fileResp.body, {
+            status: 200,
+            headers: {
+              'Content-Type': fileResp.headers.get('Content-Type') || 'application/pdf',
               'Content-Disposition': 'inline; filename="resume.pdf"',
               'Access-Control-Allow-Origin': '*',
               'Cache-Control': 'public, max-age=3600',
-            });
-            return new Response(altResp.body, { status: 200, headers });
-          }
+            },
+          });
         }
       }
     }
 
-    // 方法4：完整拷贝 Feishu 下载 URL 并代理（不带 Cookie，透传）
-    if (feishuDownloadUrl) {
-      const rawResp = await fetch(feishuDownloadUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'application/pdf,*/*',
-        },
-        redirect: 'follow',
-      });
-      if (rawResp.ok) {
-        const ct = rawResp.headers.get('Content-Type') || '';
-        // 只返回 PDF / 二进制内容，跳过 JSON / HTML
-        if (ct && !ct.includes('pdf') && !ct.includes('octet-stream') && !ct.includes('binary')) {
-          console.error(`[FeishuAPI] 方法4返回非PDF内容: ${ct}，跳过`);
-        } else {
-          const headers = new Headers({
+    // 方法C：用 box/stream/download/all URL 带鉴权
+    const boxUrl = `https://${env.FEISHU_HOST || 'ywwlaii6ga7'}.feishu.cn/space/api/box/stream/download/all/${fileToken}?mount_node_token=${env.FEISHU_BITABLE_APP_TOKEN || FEISHU_CONFIG.appToken}&mount_point=bitable`;
+    const boxResp = await fetch(boxUrl, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': `https://${env.FEISHU_HOST || 'ywwlaii6ga7'}.feishu.cn/`,
+      },
+      redirect: 'follow',
+    });
+    if (boxResp.ok) {
+      const ct = boxResp.headers.get('Content-Type') || '';
+      if (ct.includes('pdf') || ct.includes('octet-stream') || ct.includes('binary') || ct.includes('application/') || !ct) {
+        return new Response(boxResp.body, {
+          status: 200,
+          headers: {
             'Content-Type': ct || 'application/pdf',
             'Content-Disposition': 'inline; filename="resume.pdf"',
             'Access-Control-Allow-Origin': '*',
             'Cache-Control': 'public, max-age=3600',
-          });
-          return new Response(rawResp.body, { status: 200, headers });
-        }
+          },
+        });
       }
     }
 
-    console.error(`[FeishuAPI] all download methods failed for token=${fileToken}`);
+    console.error(`[FeishuAPI] 所有下载方法失败 fileToken=${fileToken}`);
     return null;
   } catch (e: any) {
     console.error(`[FeishuAPI] download attachment error: ${e.message}`);
@@ -5255,9 +5274,9 @@ async function notifyInterviewersForCandidate(env: Env, token: string, record: a
           }
         }
 
-        // 发送卡片
+        // 发送卡片（使用 sendFeishuMessageWithFallback 自动处理 token 过期和降级）
         const cardContent = buildInterviewerCard(record.candidate_name, posName, record.city, record.ai_analysis, operatorName);
-        await sendFeishuMessageToUser(userToken, openId, cardContent);
+        await sendFeishuMessageWithFallback(env, openId, cardContent, userToken !== token ? userToken : undefined);
         console.log(`[NotifyInterviewers] ✅ 已通知 ${name} (${openId}) - ${record.candidate_name}`);
       }
     }
@@ -5405,7 +5424,7 @@ app.post('/api/interviews/:id/notify-interviewer', authMiddleware, async (c) => 
       return c.json({ detail: `找不到面试官 ${interviewerName} 的飞书 open_id，请确认该姓名在企业通讯录中存在或已绑定飞书` }, 400);
     }
 
-    // 3. 用「当前用户」的 feishu_token 发私信给面试官
+    // 3. 用「当前用户」的 feishu_token（带 fallback）发私信给面试官
     const cardContent = buildInterviewerCard(
       candidateName,
       body.position_applied || '',
@@ -5413,8 +5432,12 @@ app.post('/api/interviews/:id/notify-interviewer', authMiddleware, async (c) => 
       '',
       currentUser?.full_name
     );
-    await sendFeishuMessageToUser(myToken, targetOpenId, cardContent);
-    return c.json({ ok: true, message: `${currentUser.full_name || '你'} 已提醒面试官 ${interviewerName}: ${candidateName}` });
+    try {
+      await sendFeishuMessageWithFallback(c.env, targetOpenId, cardContent, myToken);
+      return c.json({ ok: true, message: `${currentUser.full_name || '你'} 已提醒面试官 ${interviewerName}: ${candidateName}` });
+    } catch (err: any) {
+      throw err;
+    }
   } catch (err: any) {
     return c.json({ detail: `通知失败: ${err.message}` }, 500);
   }
