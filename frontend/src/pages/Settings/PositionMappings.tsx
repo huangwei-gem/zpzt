@@ -17,7 +17,6 @@ interface PositionGroup {
   _ids: string[];
   responsible_person: string;
   responsible_person_open_id: string;
-  interviewers: Array<{ name: string; open_id: string }>;
 }
 
 const PositionMappings: React.FC = () => {
@@ -40,8 +39,6 @@ const PositionMappings: React.FC = () => {
       (res || []).forEach((r: any) => {
         const key = r.mapped_name;
         if (!groups[key]) {
-          let ivs: Array<{ name: string; open_id: string }> = [];
-          try { ivs = JSON.parse(r.interviewers || '[]'); } catch { ivs = []; }
           groups[key] = {
             key,
             mapped_name: key,
@@ -49,7 +46,6 @@ const PositionMappings: React.FC = () => {
             _ids: [],
             responsible_person: r.responsible_person || '',
             responsible_person_open_id: r.responsible_person_open_id || '',
-            interviewers: ivs,
           };
         }
         if (!groups[key].raw_names.includes(r.raw_name)) {
@@ -74,7 +70,6 @@ const PositionMappings: React.FC = () => {
       mapped_name: '',
       raw_names: [],
       responsible_person: '',
-      interviewers: [],
     });
     setModalVisible(true);
   };
@@ -85,7 +80,6 @@ const PositionMappings: React.FC = () => {
       mapped_name: record.mapped_name,
       raw_names: record.raw_names,
       responsible_person: record.responsible_person,
-      interviewers: record.interviewers.map(iv => iv.name).join(', '),
     });
     setModalVisible(true);
   };
@@ -93,22 +87,18 @@ const PositionMappings: React.FC = () => {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
-      const { mapped_name, raw_names, responsible_person, interviewers } = values;
+      const { mapped_name, raw_names, responsible_person } = values;
       if (!raw_names || raw_names.length === 0) {
         message.warning('请至少输入一个 BOSS 岗位名称');
         return;
       }
-      // 解析面试官字符串为数组
-      const interviewerArr = interviewers
-        ? interviewers.split(/[,，、]/).map((n: string) => n.trim()).filter(Boolean).map((name: string) => ({ name, open_id: '' }))
-        : [];
       
       await request.post('/position-mappings/batch-save', {
         mapped_name,
         raw_names: Array.isArray(raw_names) ? raw_names : [raw_names],
         responsible_person: responsible_person || '',
         responsible_person_open_id: '',
-        interviewers: interviewerArr,
+        interviewers: [],
       });
       message.success(editing ? '更新成功' : '创建成功');
       setModalVisible(false);
@@ -177,23 +167,7 @@ const PositionMappings: React.FC = () => {
       key: 'responsible_person',
       width: 130,
       render: (_: any, record: PositionGroup) => (
-        record.responsible_person
-          ? <Tag icon={<UserOutlined />} color="orange">{record.responsible_person}</Tag>
-          : <Text type="secondary">-</Text>
-      ),
-    },
-    {
-      title: '面试官',
-      key: 'interviewers',
-      width: 240,
-      render: (_: any, record: PositionGroup) => (
-        record.interviewers.length > 0
-          ? <Space wrap size={[4, 4]}>
-              {record.interviewers.map((iv, i) => (
-                <Tag key={i} color="geekblue">{iv.name}</Tag>
-              ))}
-            </Space>
-          : <Text type="secondary">-</Text>
+        <Tag icon={<UserOutlined />} color="orange">{record.responsible_person || '杜雁玲'}</Tag>
       ),
     },
     {
@@ -263,9 +237,6 @@ const PositionMappings: React.FC = () => {
           <Divider />
           <Form.Item name="responsible_person" label="负责人">
             <Input placeholder="输入负责人姓名（从飞书同步后自动填充）" />
-          </Form.Item>
-          <Form.Item name="interviewers" label="面试官（多个用逗号分隔）">
-            <Input placeholder="如：张三, 李四, 王五" />
           </Form.Item>
         </Form>
         </div>

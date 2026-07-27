@@ -25,6 +25,7 @@ const CapabilityDimensions: React.FC = () => {
   const [editing, setEditing] = useState<any>(null);
   const [form] = Form.useForm();
   const [search, setSearch] = useState('');
+  const [dimCollapsed, setDimCollapsed] = useState<Record<number, boolean>>({}); // 每个维度描述区域的折叠状态
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -303,52 +304,83 @@ const CapabilityDimensions: React.FC = () => {
           <Form.List name="dimensions">
             {(fields, { add, remove }) => (
               <div style={{ background: '#fafafa', padding: 16, borderRadius: 8, marginBottom: 16 }}>
-                {fields.map(({ key, name, ...restField }) => (
-                  <Card
-                    key={key}
-                    size="small"
-                    style={{ marginBottom: 12, background: '#fff' }}
-                    type="inner"
-                    title={`维度 ${name + 1}`}
-                    extra={
-                      fields.length > 1 && (
-                        <Button
-                          type="text"
-                          danger
-                          icon={<MinusCircleOutlined />}
-                          onClick={() => remove(name)}
+                {fields.map(({ key, name, ...restField }, index) => {
+                  const isCollapsed = dimCollapsed[index] ?? true; // 默认折叠
+                  const toggleCollapse = () => {
+                    setDimCollapsed(prev => ({ ...prev, [index]: !isCollapsed }));
+                  };
+                  return (
+                    <div
+                      key={key}
+                      style={{
+                        padding: '12px 16px',
+                        marginBottom: 12,
+                        border: '1px solid #E2E8F0',
+                        borderRadius: 8,
+                        background: '#fff',
+                        position: 'relative'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <Form.Item
+                          {...restField}
+                          name={[name, 'name']}
+                          rules={[{ required: true, message: '请输入维度名称' }]}
+                          style={{ marginBottom: 0, flex: 1, marginRight: 8 }}
                         >
-                          删除
-                        </Button>
-                      )
-                    }
-                  >
-                    <Space direction="vertical" style={{ width: '100%' }}>
-                      <Form.Item
-                        {...restField}
-                        name={[name, 'name']}
-                        label="维度名称"
-                        rules={[{ required: true, message: '请输入维度名称' }]}
-                      >
-                        <Input placeholder="例：市场洞察能力" />
-                      </Form.Item>
-                      <Form.Item
-                        {...restField}
-                        name={[name, 'definition']}
-                        label="简要定义"
-                      >
-                        <TextArea rows={2} placeholder="该维度的简要定义说明…" />
-                      </Form.Item>
-                      <Form.Item
-                        {...restField}
-                        name={[name, 'behavior']}
-                        label="典型行为表现"
-                      >
-                        <TextArea rows={2} placeholder="该维度的典型行为表现…" />
-                      </Form.Item>
-                    </Space>
-                  </Card>
-                ))}
+                          <Input
+                            placeholder="维度名称"
+                            variant="borderless"
+                            style={{
+                              fontWeight: 600,
+                              fontSize: 15,
+                              padding: 0,
+                              background: 'transparent',
+                              width: '100%'
+                            }}
+                          />
+                        </Form.Item>
+                        <Space size={4}>
+                          <Button
+                            type="text"
+                            size="small"
+                            onClick={toggleCollapse}
+                            style={{ color: '#64748B', fontSize: 12 }}
+                          >
+                            {isCollapsed ? '收起描述 ▲' : '展开描述 ▼'}
+                          </Button>
+                          {fields.length > 1 && (
+                            <Button
+                              type="text"
+                              danger
+                              size="small"
+                              icon={<MinusCircleOutlined />}
+                              onClick={() => remove(name)}
+                            />
+                          )}
+                        </Space>
+                      </div>
+                      {isCollapsed && (
+                        <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 10 }}>
+                          <Form.Item
+                            {...restField}
+                            name={[name, 'definition']}
+                            style={{ marginBottom: 8 }}
+                          >
+                            <TextArea rows={2} placeholder="该维度的简要定义" showCount maxLength={500} variant="filled" />
+                          </Form.Item>
+                          <Form.Item
+                            {...restField}
+                            name={[name, 'behavior']}
+                            style={{ marginBottom: 0 }}
+                          >
+                            <TextArea rows={2} placeholder="描述典型的行为表现" showCount maxLength={500} variant="filled" />
+                          </Form.Item>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
                 <Button type="dashed" onClick={() => add({ name: '', definition: '', behavior: '' })} block>
                   + 添加维度
                 </Button>
