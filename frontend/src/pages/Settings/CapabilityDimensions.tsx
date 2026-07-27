@@ -277,9 +277,10 @@ const CapabilityDimensions: React.FC = () => {
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         onOk={handleSubmit}
-        width={800}
+        width={840}
         destroyOnClose
       >
+        <div style={{ padding: '8px 0' }}>
         <Form form={form} layout="vertical" preserve={false}>
           <Form.Item
             name="position_name"
@@ -370,6 +371,7 @@ const CapabilityDimensions: React.FC = () => {
             />
           </Form.Item>
         </Form>
+        </div>
       </Modal>
     </div>
   );

@@ -354,8 +354,9 @@ const UsersList: React.FC = () => {
         onCancel={handleCloseModal}
         confirmLoading={submitting}
         destroyOnClose
-        width={560}
+        width={640}
       >
+        <div style={{ padding: '8px 0' }}>
         <Form form={form} layout="vertical">
           {!isEditModal && (
             <Form.Item name="email" label="邮箱" rules={[{ required: true, type: 'email', message: '请输入有效的邮箱地址' }]}>
@@ -437,6 +438,7 @@ const UsersList: React.FC = () => {
             </div>
           </Form.Item>
         </Form>
+        </div>
       </Modal>
     </div>
   );

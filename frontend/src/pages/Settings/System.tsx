@@ -241,7 +241,7 @@ const SystemSettingsPage: React.FC = () => {
           </Space>
         }
       >
-        <Form form={form} layout="vertical" autoComplete="off">
+        <Form form={form} layout="vertical" autoComplete="off" style={{ maxWidth: 640 }}>
           <input type="text" name="username" autoComplete="username" style={{ display: 'none' }} />
           <input type="password" name="password" autoComplete="current-password" style={{ display: 'none' }} />
 

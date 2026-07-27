@@ -805,151 +805,156 @@ const PositionsList: React.FC = () => {
         okText="保存"
         cancelText="取消"
       >
-        <Form
-          form={form}
-          layout="vertical"
-          style={{ marginTop: 24 }}
-        >
-          <Form.Item
-            name="title"
-            label="岗位名称"
-            rules={[{ required: true, message: '请输入岗位名称' }]}
+        <div style={{ padding: '16px 0' }}>
+          <Form
+            form={form}
+            layout="vertical"
+            style={{ marginTop: 8 }}
           >
-            <Input placeholder="例如：高级前端工程师" size="large" />
-          </Form.Item>
+            <Form.Item
+              name="title"
+              label="岗位名称"
+              rules={[{ required: true, message: '请输入岗位名称' }]}
+            >
+              <Input placeholder="例如：高级前端工程师" size="large" />
+            </Form.Item>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            <Form.Item name="department" label="所属部门">
-              <Input placeholder="例如：研发部" size="large" />
-            </Form.Item>
-            <Form.Item name="location" label="工作地点">
-              <Input placeholder="例如：北京" size="large" />
-            </Form.Item>
-          </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+              <Form.Item name="department" label="所属部门">
+                <Input placeholder="例如：研发部" size="large" />
+              </Form.Item>
+              <Form.Item name="location" label="工作地点">
+                <Input placeholder="例如：北京" size="large" />
+              </Form.Item>
+            </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            <Form.Item name="salary_range" label="薪资范围">
-              <Input placeholder="例如：20k-30k" size="large" />
-            </Form.Item>
-            <Form.Item name="headcount" label="招聘人数">
-              <Input type="number" min={1} placeholder="1" size="large" />
-            </Form.Item>
-          </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+              <Form.Item name="salary_range" label="薪资范围">
+                <Input placeholder="例如：20k-30k" size="large" />
+              </Form.Item>
+              <Form.Item name="headcount" label="招聘人数">
+                <Input type="number" min={1} placeholder="1" size="large" />
+              </Form.Item>
+            </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            <Form.Item name="position_type" label="岗位类型">
-              <Select size="large">
-                <Select.Option value="full_time">全职</Select.Option>
-                <Select.Option value="part_time">兼职</Select.Option>
-                <Select.Option value="contract">合同</Select.Option>
-                <Select.Option value="internship">实习</Select.Option>
-              </Select>
-            </Form.Item>
-            <Form.Item name="urgency" label="紧急程度">
-              <Select size="large">
-                <Select.Option value="low">低</Select.Option>
-                <Select.Option value="medium">中</Select.Option>
-                <Select.Option value="high">高</Select.Option>
-                <Select.Option value="urgent">紧急</Select.Option>
-              </Select>
-            </Form.Item>
-          </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+              <Form.Item name="position_type" label="岗位类型">
+                <Select size="large">
+                  <Select.Option value="full_time">全职</Select.Option>
+                  <Select.Option value="part_time">兼职</Select.Option>
+                  <Select.Option value="contract">合同</Select.Option>
+                  <Select.Option value="internship">实习</Select.Option>
+                </Select>
+              </Form.Item>
+              <Form.Item name="urgency" label="紧急程度">
+                <Select size="large">
+                  <Select.Option value="low">低</Select.Option>
+                  <Select.Option value="medium">中</Select.Option>
+                  <Select.Option value="high">高</Select.Option>
+                  <Select.Option value="urgent">紧急</Select.Option>
+                </Select>
+              </Form.Item>
+            </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            <Form.Item name="hiring_manager_id" label="招聘负责人">
-              <Select size="large" allowClear placeholder="选择招聘负责人" showSearch optionFilterProp="children">
-                {users.map(user => (
-                  <Select.Option key={user.id} value={user.id}>{user.full_name} ({user.email})</Select.Option>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+              <Form.Item name="hiring_manager_id" label="招聘负责人">
+                <Select size="large" allowClear placeholder="选择招聘负责人" showSearch optionFilterProp="children">
+                  {users.map(user => (
+                    <Select.Option key={user.id} value={user.id}>{user.full_name} ({user.email})</Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+              <Form.Item name="responsible_person" label="责任人">
+                <Input placeholder="从飞书同步或手动填写" size="large" />
+              </Form.Item>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+              <Form.Item name="primary_interviewer" label="一面面试官" initialValue="杜雁玲">
+                <Input placeholder="默认：杜雁玲" size="large" />
+              </Form.Item>
+              <Form.Item name="secondary_interviewer" label="二面面试官" initialValue="何雨菱">
+                <Input placeholder="默认：何雨菱" size="large" />
+              </Form.Item>
+            </div>
+
+            {/* 能力维度 — 多选 */}
+            <Form.Item
+              name="capability_dimensions"
+              label={
+                <Space>
+                  <RadarChartOutlined />
+                  <span>能力维度（可多选）</span>
+                </Space>
+              }
+              extra="如需新维度，请先在「设置 → 能力维度配置」中添加"
+            >
+              <Select
+                mode="multiple"
+                size="large"
+                placeholder="选择能力维度，支持搜索"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+              >
+                {allDimNames.map(name => (
+                  <Select.Option key={name} value={name} label={name}>{name}</Select.Option>
                 ))}
               </Select>
             </Form.Item>
-            <Form.Item name="responsible_person" label="责任人">
-              <Input placeholder="从飞书同步或手动填写" size="large" />
-            </Form.Item>
-          </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            <Form.Item name="primary_interviewer" label="一面面试官" initialValue="杜雁玲">
-              <Input placeholder="默认：杜雁玲" size="large" />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, marginTop: 8 }}>
+              <Text strong>岗位职责</Text>
+              <Button type="link" icon={<RobotOutlined />} onClick={handleOpenJDModal}>
+                AI 生成 JD
+              </Button>
+            </div>
+            <Form.Item name="description" rules={[{ required: true, message: '请输入岗位职责' }]}>
+              <Input.TextArea rows={4} placeholder="请输入详细的岗位职责描述" showCount maxLength={2000} style={{ padding: '8px 12px' }} />
             </Form.Item>
-            <Form.Item name="secondary_interviewer" label="二面面试官" initialValue="何雨菱">
-              <Input placeholder="默认：何雨菱" size="large" />
-            </Form.Item>
-          </div>
 
-          {/* 能力维度 — 多选 */}
-          <Form.Item
-            name="capability_dimensions"
-            label={
+            <Form.Item name="requirements" label={
               <Space>
-                <RadarChartOutlined />
-                <span>能力维度（可多选）</span>
+                <MergeCellsOutlined />
+                <span>任职要求（可多选 / 自定义输入回车添加）</span>
               </Space>
-            }
-            extra="如需新维度，请先在「设置 → 能力维度配置」中添加"
-          >
-            <Select
-              mode="multiple"
-              size="large"
-              placeholder="选择能力维度，支持搜索"
-              allowClear
-              showSearch
-              optionFilterProp="label"
-            >
-              {allDimNames.map(name => (
-                <Select.Option key={name} value={name} label={name}>{name}</Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
+            }>
+              <Select
+                mode="tags"
+                size="large"
+                placeholder="选择或输入任职要求，按回车添加"
+                allowClear
+                tokenSeparators={[',', '，']}
+              >
+                <Select.Option value="本科及以上学历">本科及以上学历</Select.Option>
+                <Select.Option value="硕士及以上学历">硕士及以上学历</Select.Option>
+                <Select.Option value="3年以上相关工作经验">3年以上相关工作经验</Select.Option>
+                <Select.Option value="5年以上相关工作经验">5年以上相关工作经验</Select.Option>
+                <Select.Option value="精通前后端开发技术">精通前后端开发技术</Select.Option>
+                <Select.Option value="具备团队管理经验">具备团队管理经验</Select.Option>
+                <Select.Option value="具备良好的沟通协作能力">具备良好的沟通协作能力</Select.Option>
+                <Select.Option value="有大型项目架构经验">有大型项目架构经验</Select.Option>
+                <Select.Option value="英语流利可作为工作语言">英语流利可作为工作语言</Select.Option>
+                <Select.Option value="有相关行业经验">有相关行业经验</Select.Option>
+              </Select>
+            </Form.Item>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <Text strong>岗位职责</Text>
-            <Button type="link" icon={<RobotOutlined />} onClick={handleOpenJDModal}>
-              AI 生成 JD
-            </Button>
-          </div>
-          <Form.Item name="description" rules={[{ required: true, message: '请输入岗位职责' }]}>
-            <Input.TextArea rows={4} placeholder="请输入详细的岗位职责描述" showCount maxLength={2000} style={{ padding: '8px 12px' }} />
-          </Form.Item>
+            <Form.Item name="personalized_requirements" label="个性化需求">
+              <Input.TextArea rows={3} placeholder="如特殊语言要求、特定行业经验等" style={{ padding: '8px 12px' }} />
+            </Form.Item>
 
-          <Form.Item name="requirements" label={
-            <Space>
-              <MergeCellsOutlined />
-              <span>任职要求（可多选 / 自定义输入回车添加）</span>
-            </Space>
-          }>
-            <Select
-              mode="tags"
-              size="large"
-              placeholder="选择或输入任职要求，按回车添加"
-              allowClear
-              tokenSeparators={[',', '，']}
-            >
-              <Select.Option value="本科及以上学历">本科及以上学历</Select.Option>
-              <Select.Option value="硕士及以上学历">硕士及以上学历</Select.Option>
-              <Select.Option value="3年以上相关工作经验">3年以上相关工作经验</Select.Option>
-              <Select.Option value="5年以上相关工作经验">5年以上相关工作经验</Select.Option>
-              <Select.Option value="精通前后端开发技术">精通前后端开发技术</Select.Option>
-              <Select.Option value="具备团队管理经验">具备团队管理经验</Select.Option>
-              <Select.Option value="具备良好的沟通协作能力">具备良好的沟通协作能力</Select.Option>
-              <Select.Option value="有大型项目架构经验">有大型项目架构经验</Select.Option>
-              <Select.Option value="英语流利可作为工作语言">英语流利可作为工作语言</Select.Option>
-              <Select.Option value="有相关行业经验">有相关行业经验</Select.Option>
-            </Select>
-          </Form.Item>
-
-          <Form.Item name="personalized_requirements" label="个性化需求">
-            <Input.TextArea rows={3} placeholder="如特殊语言要求、特定行业经验等" style={{ padding: '8px 12px' }} />
-          </Form.Item>
-
-          <Form.Item name="status" label="状态">
-            <Select size="large">
-              <Select.Option value="open">待发布</Select.Option>
-              <Select.Option value="published">招聘中</Select.Option>
-              <Select.Option value="closed">已关闭</Select.Option>
-            </Select>
-          </Form.Item>
-        </Form>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+              <Form.Item name="status" label="状态">
+                <Select size="large">
+                  <Select.Option value="open">待发布</Select.Option>
+                  <Select.Option value="published">招聘中</Select.Option>
+                  <Select.Option value="closed">已关闭</Select.Option>
+                </Select>
+              </Form.Item>
+              <div /> {/* 占位对齐 */}
+            </div>
+          </Form>
+        </div>
       </Modal>
 
       <Modal title="AI候选人匹配排名" open={aiMatchVisible} onCancel={() => setAiMatchVisible(false)} footer={<Button onClick={() => setAiMatchVisible(false)}>关闭</Button>} width={640}>

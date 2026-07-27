@@ -122,7 +122,8 @@ const PositionForm: React.FC = () => {
             <Input placeholder="例如：高级前端工程师" size="large" />
           </Form.Item>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+              {/* 基本信息: 部门 + 地点 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: 8 }}>
             <Form.Item
               name="department"
               label="所属部门"
@@ -138,7 +139,8 @@ const PositionForm: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+          {/* 薪酬与编制 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: 8 }}>
             <Form.Item
               name="salary_range"
               label="薪资范围"
@@ -154,7 +156,8 @@ const PositionForm: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+          {/* 岗位类型 + 紧急程度 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: 8 }}>
             <Form.Item
               name="position_type"
               label="岗位类型"
@@ -180,7 +183,8 @@ const PositionForm: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+          {/* 面试官 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: 8 }}>
             <Form.Item name="primary_interviewer" label="一面面试官" initialValue="杜雁玲">
               <Input placeholder="默认：杜雁玲" size="large" />
             </Form.Item>
@@ -189,7 +193,8 @@ const PositionForm: React.FC = () => {
             </Form.Item>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+          {/* 负责人 2 列 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: 8 }}>
             <Form.Item
               name="hiring_manager_id"
               label="招聘负责人"
@@ -200,8 +205,9 @@ const PositionForm: React.FC = () => {
                 ))}
               </Select>
             </Form.Item>
-
-      
+            <Form.Item name="responsible_person" label="责任人">
+              <Input placeholder="从飞书同步或手动填写" size="large" />
+            </Form.Item>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -228,18 +234,22 @@ const PositionForm: React.FC = () => {
             <Input.TextArea rows={6} placeholder="请输入任职资格要求" showCount maxLength={2000} />
           </Form.Item>
 
-          <Form.Item
-            name="status"
-            label="状态"
-          >
-            <Select size="large">
-              <Select.Option value="open">待发布</Select.Option>
-              <Select.Option value="published">招聘中</Select.Option>
-              <Select.Option value="closed">已关闭</Select.Option>
-            </Select>
-          </Form.Item>
+          {/* 状态 + 空列 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: 8 }}>
+            <Form.Item
+              name="status"
+              label="状态"
+            >
+              <Select size="large">
+                <Select.Option value="open">待发布</Select.Option>
+                <Select.Option value="published">招聘中</Select.Option>
+                <Select.Option value="closed">已关闭</Select.Option>
+              </Select>
+            </Form.Item>
+            <div /> {/* 占位对齐 */}
+          </div>
 
-          <Form.Item name="capability_dimensions" label="能力维度（多选）">
+          <Form.Item name="capability_dimensions" label="能力维度（多选）" style={{ marginBottom: 8 }}>
             <Select
               mode="multiple"
               size="large"

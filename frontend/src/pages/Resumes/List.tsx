@@ -1743,16 +1743,21 @@ const HoverDetail: React.FC<{
   const [hover, setHover] = useState(false);
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const posRef = useRef({ x: 0, y: 0 });
 
   const handleEnter = (e: React.MouseEvent) => {
+    posRef.current = { x: e.clientX, y: e.clientY };
+    setPos({ x: e.clientX, y: e.clientY });
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
-      setPos({ x: e.clientX, y: e.clientY });
+      // 弹出时使用最新鼠标位置
+      setPos({ x: posRef.current.x, y: posRef.current.y });
       setHover(true);
     }, 200);
   };
   const handleMove = (e: React.MouseEvent) => {
-    if (hover) setPos({ x: e.clientX, y: e.clientY });
+    posRef.current = { x: e.clientX, y: e.clientY };
+    setPos({ x: e.clientX, y: e.clientY });
   };
   const handleLeave = () => {
     if (timerRef.current) clearTimeout(timerRef.current);

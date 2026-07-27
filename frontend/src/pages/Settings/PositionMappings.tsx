@@ -250,8 +250,9 @@ const PositionMappings: React.FC = () => {
         open={modalVisible}
         onOk={handleSubmit}
         onCancel={() => setModalVisible(false)}
-        width={560}
+        width={640}
       >
+        <div style={{ padding: '8px 0' }}>
         <Form form={form} layout="vertical">
           <Form.Item name="mapped_name" label="标准岗位名" rules={[{ required: true, message: '请输入标准岗位名' }]}>
             <Input placeholder="如：招商专员（地招）" />
@@ -267,6 +268,7 @@ const PositionMappings: React.FC = () => {
             <Input placeholder="如：张三, 李四, 王五" />
           </Form.Item>
         </Form>
+        </div>
       </Modal>
     </Card>
   );

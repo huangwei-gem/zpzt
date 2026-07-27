@@ -213,9 +213,10 @@ const RequisitionsList: React.FC = () => {
       </Card>
 
       <Modal title={editing ? '编辑需求' : '提报人力需求'} open={modalVisible} onCancel={() => setModalVisible(false)}
-        onOk={handleSubmit} width={640} destroyOnClose>
+        onOk={handleSubmit} width={720} destroyOnClose>
+        <div style={{ padding: '8px 0' }}>
         <Form form={form} layout="vertical">
-          <Row gutter={16}>
+          <Row gutter={24}>
             <Col span={12}>
               <Form.Item name="title" label="岗位名称" rules={[{ required: true, message: '请输入岗位名称' }]}>
                 <Input placeholder="如：高级前端工程师" />
@@ -227,7 +228,7 @@ const RequisitionsList: React.FC = () => {
               </Form.Item>
             </Col>
           </Row>
-          <Row gutter={16}>
+          <Row gutter={24}>
             <Col span={8}>
               <Form.Item name="headcount" label="招聘人数" rules={[{ required: true }]}>
                 <InputNumber min={1} style={{ width: '100%' }} />
@@ -251,7 +252,7 @@ const RequisitionsList: React.FC = () => {
               </Form.Item>
             </Col>
           </Row>
-          <Row gutter={16}>
+          <Row gutter={24}>
             <Col span={8}>
               <Form.Item name="salary_range" label="薪资范围">
                 <Input placeholder="如：15-25K" />
@@ -268,19 +269,25 @@ const RequisitionsList: React.FC = () => {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="reporting_to" label="汇报对象">
-            <Input placeholder="如：技术总监" />
-          </Form.Item>
-          <Form.Item name="description" label="岗位描述">
+          <Row gutter={24}>
+            <Col span={12}>
+              <Form.Item name="reporting_to" label="汇报对象">
+                <Input placeholder="如：技术总监" />
+              </Form.Item>
+            </Col>
+            <Col span={12} />
+          </Row>
+          <Form.Item name="description" label="岗位描述" style={{ marginBottom: 8 }}>
             <TextArea rows={3} placeholder="岗位职责描述" />
           </Form.Item>
-          <Form.Item name="requirements" label="任职要求">
+          <Form.Item name="requirements" label="任职要求" style={{ marginBottom: 8 }}>
             <TextArea rows={3} placeholder="学历、经验、技能等要求" />
           </Form.Item>
           <Form.Item name="channel_plan" label="渠道规划">
             <TextArea rows={2} placeholder="招聘渠道计划" />
           </Form.Item>
         </Form>
+        </div>
       </Modal>
     </div>
   );

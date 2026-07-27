@@ -119,9 +119,10 @@ const ProfileSettings: React.FC = () => {
         <Text type="secondary">更新你的个人资料与登录密码</Text>
       </div>
 
+      <div style={{ maxWidth: 640 }}>
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
         <Card title="个人资料" styles={{ body: { paddingTop: 8 } }}>
-          <Form form={profileForm} layout="vertical">
+          <Form form={profileForm} layout="vertical" style={{ maxWidth: 480 }}>
             <Form.Item label="邮箱" name="email">
               <Input disabled />
             </Form.Item>
@@ -143,14 +144,14 @@ const ProfileSettings: React.FC = () => {
                 </Button>
               </div>
             </Form.Item>
-            <Button type="primary" onClick={saveProfile} loading={savingProfile}>
+            <Button type="primary" onClick={saveProfile} loading={savingProfile} size="large">
               保存
             </Button>
           </Form>
         </Card>
 
         <Card title="修改密码" styles={{ body: { paddingTop: 8 } }}>
-          <Form form={passwordForm} layout="vertical">
+          <Form form={passwordForm} layout="vertical" style={{ maxWidth: 480 }}>
             <Form.Item
               label="当前密码"
               name="current_password"
@@ -182,7 +183,7 @@ const ProfileSettings: React.FC = () => {
               <Input.Password />
             </Form.Item>
             <Divider style={{ margin: '8px 0 16px' }} />
-            <Button type="primary" onClick={changePassword} loading={savingPassword}>
+            <Button type="primary" onClick={changePassword} loading={savingPassword} size="large">
               更新密码
             </Button>
           </Form>
@@ -229,6 +230,7 @@ const ProfileSettings: React.FC = () => {
           </div>
         </Card>
       </Space>
+      </div>
     </div>
   );
 };

@@ -176,28 +176,33 @@ const ProbationList: React.FC = () => {
           scroll={{ x: 1100 }} pagination={{ pageSize: 10, showSizeChanger: true }} />
       </Card>
       <Modal title={editing ? '编辑试用记录' : '新增试用记录'} open={modalVisible}
-        onCancel={() => setModalVisible(false)} onOk={handleSubmit} width={560} destroyOnClose>
+        onCancel={() => setModalVisible(false)} onOk={handleSubmit} width={640} destroyOnClose>
+        <div style={{ padding: '8px 0' }}>
         <Form form={form} layout="vertical">
           <Form.Item name="employee_name" label="员工姓名" rules={[{ required: true, message: '请输入姓名' }]}>
             <Input />
           </Form.Item>
-          <Row gutter={16}>
+          <Row gutter={24}>
             <Col span={12}><Form.Item name="employee_id" label="工号"><Input placeholder="如：EMP001" /></Form.Item></Col>
             <Col span={12}><Form.Item name="probation_months" label="试用期（月）"><InputNumber min={1} max={12} style={{ width: '100%' }} /></Form.Item></Col>
           </Row>
           <Form.Item name="probation_start" label="试用开始日期"><DatePicker style={{ width: '100%' }} /></Form.Item>
           {editing && (<>
             <Form.Item name="final_assessment" label="最终评估"><TextArea rows={3} placeholder="试用期述职评估" /></Form.Item>
-            <Form.Item name="result" label="结果">
-              <Select>{Object.entries(resultConfig).map(([k, v]) => <Option key={k} value={k}>{v.text}</Option>)}</Select>
-            </Form.Item>
-            <Row gutter={16}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+              <Form.Item name="result" label="结果">
+                <Select>{Object.entries(resultConfig).map(([k, v]) => <Option key={k} value={k}>{v.text}</Option>)}</Select>
+              </Form.Item>
+              <div /> {/* 占位 */}
+            </div>
+            <Row gutter={24}>
               <Col span={12}><Form.Item name="new_title" label="转正后职位"><Input /></Form.Item></Col>
               <Col span={12}><Form.Item name="salary_adjustment" label="薪资调整（%）"><InputNumber style={{ width: '100%' }} placeholder="如：10" /></Form.Item></Col>
             </Row>
             <Form.Item name="notes" label="备注"><TextArea rows={2} /></Form.Item>
           </>)}
         </Form>
+        </div>
       </Modal>
       <Modal title="添加月度评估" open={reviewVisible} onCancel={() => setReviewVisible(false)}
         onOk={handleReviewSubmit} width={520} destroyOnClose>

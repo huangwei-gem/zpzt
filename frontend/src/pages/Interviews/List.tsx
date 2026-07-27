@@ -468,13 +468,16 @@ const InterviewsList: React.FC = () => {
         width={520}
         destroyOnClose
       >
+        <div style={{ padding: '8px 0' }}>
         <Form form={scheduleForm} layout="vertical" preserve={false}>
-          <Form.Item name="interview_date" label="面试日期">
-            <DatePicker style={{ width: '100%' }} placeholder="选择面试日期（可选）" />
-          </Form.Item>
-          <Form.Item name="interview_time" label="面试时间">
-            <DatePicker.TimePicker style={{ width: '100%' }} placeholder="选择面试时间（可选）" format="HH:mm" />
-          </Form.Item>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+            <Form.Item name="interview_date" label="面试日期">
+              <DatePicker style={{ width: '100%' }} placeholder="选择面试日期（可选）" />
+            </Form.Item>
+            <Form.Item name="interview_time" label="面试时间">
+              <DatePicker.TimePicker style={{ width: '100%' }} placeholder="选择面试时间（可选）" format="HH:mm" />
+            </Form.Item>
+          </div>
           <Form.Item name="interview_location" label="面试地点 / 会议链接">
             <Input placeholder="例如：3楼会议室 / https://meeting.tencent.com/xxx（可选）" />
           </Form.Item>
@@ -482,6 +485,7 @@ const InterviewsList: React.FC = () => {
             <Input placeholder="输入面试官姓名（默认杜雁玲，后期可修改）" />
           </Form.Item>
         </Form>
+        </div>
       </Modal>
 
       {/* 评价弹窗 */}

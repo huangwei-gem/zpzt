@@ -106,8 +106,8 @@ const MailSettingsPage: React.FC = () => {
           </Space>
         }
       >
-        <Form form={form} layout="vertical" autoComplete="off">
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <Form form={form} layout="vertical" autoComplete="off" style={{ maxWidth: 720 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
             <Form.Item name="smtp_host" label="SMTP 主机">
               <Input placeholder="smtp.example.com" autoComplete="off" />
             </Form.Item>
@@ -115,7 +115,7 @@ const MailSettingsPage: React.FC = () => {
               <InputNumber min={1} max={65535} style={{ width: '100%' }} placeholder="465" />
             </Form.Item>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
             <Form.Item name="smtp_username" label="SMTP 用户名">
               <Input placeholder="noreply@example.com" autoComplete="off" />
             </Form.Item>
@@ -142,7 +142,7 @@ const MailSettingsPage: React.FC = () => {
             </Form.Item>
           </div>
           <Divider />
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
             <Form.Item name="mail_from" label="发件人地址">
               <Input placeholder="noreply@example.com" />
             </Form.Item>
@@ -150,7 +150,7 @@ const MailSettingsPage: React.FC = () => {
               <Input placeholder="招聘系统" />
             </Form.Item>
           </div>
-          <Form.Item name="frontend_url" label="前端地址">
+          <Form.Item name="frontend_url" label="前端地址" style={{ maxWidth: 480 }}>
             <Input placeholder="https://your-app.com" />
           </Form.Item>
           <Form.Item name="mail_enabled" label="启用邮件服务" valuePropName="checked">

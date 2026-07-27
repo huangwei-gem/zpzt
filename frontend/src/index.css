@@ -232,6 +232,43 @@ code {
   animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* ====== 全局布局优化 ====== */
+
+/* 1. Form.Item 之间的标准间距 */
+.ant-form-item {
+  margin-bottom: 18px !important;
+}
+
+/* 2. Modal 内部表单不挤边 */
+.ant-modal-body .ant-form {
+  padding: 4px 0;
+}
+
+/* 3. Card 内的表格去除 Card 默认内边距挤压 */
+.ant-card .ant-table-wrapper {
+  margin: -8px;
+}
+
+/* 4. 两列 grid 布局统一间距 */
+.ant-form div[style*="grid-template-columns: 1fr 1fr"] {
+  margin-bottom: 4px;
+}
+
+/* 5. Select / Input 在表格内的统一内边距 */
+.ant-table-cell .ant-btn-sm {
+  line-height: 1.4;
+}
+
+/* 6. Card 头部按钮间距一致 */
+.ant-card-extra .ant-space-item {
+  margin-right: 4px;
+}
+
+/* 7. Modal 表单统一加一点内距 */
+.ant-modal-body > div[style*="padding"] {
+  width: 100%;
+}
+
 @keyframes slideUp {
   from { opacity: 0; transform: translateY(20px); }
   to { opacity: 1; transform: translateY(0); }

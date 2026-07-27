@@ -133,7 +133,8 @@ const OnboardingList: React.FC = () => {
           scroll={{ x: 1200 }} pagination={{ pageSize: 10, showSizeChanger: true }} />
       </Card>
       <Modal title={editing ? '编辑入职记录' : '新增入职记录'} open={modalVisible}
-        onCancel={() => setModalVisible(false)} onOk={handleSubmit} width={640} destroyOnClose>
+        onCancel={() => setModalVisible(false)} onOk={handleSubmit} width={720} destroyOnClose>
+        <div style={{ padding: '8px 0' }}>
         <Form form={form} layout="vertical">
           <Form.Item name="resume_id" label="关联简历" rules={[{ required: true, message: '请选择简历' }]}>
             <Select showSearch placeholder="选择候选人简历" optionFilterProp="children">
@@ -143,12 +144,12 @@ const OnboardingList: React.FC = () => {
           <Form.Item name="candidate_name" label="候选人姓名" rules={[{ required: true, message: '请输入姓名' }]}>
             <Input />
           </Form.Item>
-          <Row gutter={16}>
+          <Row gutter={24}>
             <Col span={8}><Form.Item name="employee_id" label="工号"><Input placeholder="如：EMP001" /></Form.Item></Col>
             <Col span={8}><Form.Item name="department" label="部门"><Input /></Form.Item></Col>
             <Col span={8}><Form.Item name="position_title" label="职位"><Input /></Form.Item></Col>
           </Row>
-          <Row gutter={16}>
+          <Row gutter={24}>
             <Col span={8}><Form.Item name="onboard_date" label="入职日期"><DatePicker style={{ width: '100%' }} /></Form.Item></Col>
             <Col span={8}><Form.Item name="contract_type" label="合同类型">
               <Select>
@@ -162,7 +163,7 @@ const OnboardingList: React.FC = () => {
               <Select>{Object.entries(statusConfig).map(([k, v]) => <Option key={k} value={k}>{v.text}</Option>)}</Select>
             </Form.Item></Col>
           </Row>
-          {editing && (<Row gutter={16}>
+          {editing && (<Row gutter={24}>
             <Col span={6}><Form.Item name="contract_signed" label="合同已签" valuePropName="checked"><Switch /></Form.Item></Col>
             <Col span={6}><Form.Item name="accounts_created" label="账号已开" valuePropName="checked"><Switch /></Form.Item></Col>
             <Col span={6}><Form.Item name="equipment_assigned" label="设备已配" valuePropName="checked"><Switch /></Form.Item></Col>
@@ -170,6 +171,7 @@ const OnboardingList: React.FC = () => {
           </Row>)}
           <Form.Item name="notes" label="备注"><TextArea rows={2} /></Form.Item>
         </Form>
+        </div>
       </Modal>
       <Drawer title="入职详情" open={detailVisible} onClose={() => setDetailVisible(false)} width={560}>
         {current && (
