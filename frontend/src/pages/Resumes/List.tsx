@@ -1015,6 +1015,7 @@ const ResumesList: React.FC = () => {
                 placeholder="请输入姓名"
                 value={searchName}
                 onChange={e => setSearchName(e.target.value)}
+                onPressEnter={() => setTimeout(() => handleSearch(), 0)}
                 style={{ width: 200 }}
                 allowClear
               />
@@ -1023,7 +1024,7 @@ const ResumesList: React.FC = () => {
               <Select
                 placeholder="请选择状态"
                 value={searchStatus}
-                onChange={val => setSearchStatus(val)}
+                onChange={val => { setSearchStatus(val); setTimeout(() => handleSearch(), 0); }}
                 style={{ width: 130 }}
                 allowClear
               >
@@ -1036,7 +1037,7 @@ const ResumesList: React.FC = () => {
               <Select
                 placeholder="全部负责人"
                 value={searchPerson}
-                onChange={val => { setSearchPerson(val); }}
+                onChange={val => { setSearchPerson(val); setTimeout(() => handleSearch(), 0); }}
                 style={{ width: 130 }}
                 allowClear
                 showSearch
@@ -1051,7 +1052,7 @@ const ResumesList: React.FC = () => {
               <Select
                 placeholder="请选择岗位"
                 value={searchPosition}
-                onChange={val => setSearchPosition(val)}
+                onChange={val => { setSearchPosition(val); setTimeout(() => handleSearch(), 0); }}
                 style={{ width: 180 }}
                 allowClear
                 showSearch
