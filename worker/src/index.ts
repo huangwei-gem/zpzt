@@ -1175,6 +1175,47 @@ async function buildPositionMapping(db: any): Promise<Map<string, string>> {
   return map;
 }
 
+/**
+ * 将飞书「岗位能力维度要求」文本解析为前端所需的 [{name, description}] 格式的 JSON 字符串。
+ * 支持的格式：
+ *   名称: 描述                      → {"name": "名称", "description": "描述"}
+ *   名称                            → {"name": "名称", "description": ""}
+ *   已有的 JSON 数组                → 原样直通
+ */
+function parseCapabilityDimensions(raw: any): string {
+  if (!raw) return '[]';
+  // 已经是 JSON 数组字符串
+  if (typeof raw === 'string' && raw.trim().startsWith('[')) {
+    try { const arr = JSON.parse(raw); if (Array.isArray(arr)) return raw; } catch { /* fall through */ }
+  }
+  // 已经是数组
+  if (Array.isArray(raw)) {
+    const items = raw.map((d: any) => {
+      if (typeof d === 'string') return { name: d, description: '' };
+      if (d.name) return { name: d.name, description: d.description || d.definition || '' };
+      return null;
+    }).filter(Boolean);
+    return JSON.stringify(items);
+  }
+  // 文本格式：按行解析 "名称: 描述" 或 "名称"
+  const text = String(raw).trim();
+  if (!text || text === '无') return '[]';
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const items = lines.map((line: string) => {
+    // 尝试用「:」「：」分隔名称和描述
+    const sep = line.indexOf('：') !== -1 ? '：' : (line.indexOf(':') !== -1 ? ':' : null);
+    if (sep) {
+      const idx = line.indexOf(sep);
+      const name = line.substring(0, idx).trim();
+      const description = line.substring(idx + 1).trim();
+      if (name) return { name, description: description || '' };
+    }
+    // 没有分隔符，整行当名称
+    return { name: line, description: '' };
+  });
+  return JSON.stringify(items);
+}
+
 // 从招聘任务记录转成前端可用的格式
 function parseRequisitionRecord(record: any): any {
   const f = record.fields || {};
@@ -1197,7 +1238,7 @@ function parseRequisitionRecord(record: any): any {
     title: defaultIfEmpty(getFirstValue(f['招聘岗位']), '(未命名岗位)'),
     department: defaultIfEmpty(getFirstValue(f['二级部门']), '未知'),
     department_3rd: defaultIfEmpty(getFirstValue(f['三级部门']), '未知'),
-    city: defaultIfEmpty(getFirstValue(f['招聘城市']), '未知'),
+    location: defaultIfEmpty(getFirstValue(f['招聘城市']), '未知'),
     headcount: typeof headcount === 'number' ? headcount : (parseInt(String(headcount)) || 1),
     urgency,
     status,
@@ -1206,7 +1247,7 @@ function parseRequisitionRecord(record: any): any {
     description: defaultIfEmpty(getFirstValue(f['招聘JD']), '无'),
     requirements: defaultIfEmpty(getFirstValue(f['岗位职责与任职要求']), '无'),
     capability_requirements: defaultIfEmpty(getFirstValue(f['岗位能力提取']), '无'),
-    capability_dimensions: defaultIfEmpty(getFirstValue(f['岗位能力维度要求']), '无'),
+    capability_dimensions: parseCapabilityDimensions(getFirstValue(f['岗位能力维度要求'])),
     personalized_requirements: defaultIfEmpty(personalizedReq, '无'),
     city_tier: defaultIfEmpty(getFirstValue(f['城市等级']), '未知'),
     in_budget: defaultIfEmpty(getFirstValue(f['是否在编制内']), '未知'),
@@ -1493,18 +1534,20 @@ app.post('/api/positions/sync-from-feishu', authMiddleware, async (c) => {
         // 更新
         await c.env.DB.prepare(
           `UPDATE positions SET 
-            department = ?, department_3rd = ?, city = ?, headcount = ?,
+            department = ?, department_3rd = ?, location = ?, headcount = ?,
             urgency = ?, status = ?, description = ?, requirements = ?,
             responsible_person = ?, salary_range = ?,
             primary_interviewer = ?, secondary_interviewer = ?,
+            capability_dimensions = ?, personalized_requirements = ?,
             updated_at = ?
            WHERE id = ?`
         ).bind(
-          parsed.department, parsed.department_3rd, parsed.city,
+          parsed.department, parsed.department_3rd, parsed.location,
           parsed.headcount, parsed.urgency, parsed.status,
           parsed.description, parsed.requirements,
           parsed.responsible_person, parsed.salary_range,
           parsed.primary_interviewer, parsed.secondary_interviewer,
+          parsed.capability_dimensions, parsed.personalized_requirements,
           now(), existing.id
         ).run();
         updated++;
@@ -1512,18 +1555,20 @@ app.post('/api/positions/sync-from-feishu', authMiddleware, async (c) => {
         // 新建
         const id = uuid();
         await c.env.DB.prepare(
-          `INSERT INTO positions (id, title, department, department_3rd, city, headcount, 
+          `INSERT INTO positions (id, title, department, department_3rd, location, headcount, 
             urgency, status, description, requirements, responsible_person, salary_range,
             primary_interviewer, secondary_interviewer,
+            capability_dimensions, personalized_requirements,
             created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).bind(
           id, title,
-          parsed.department, parsed.department_3rd, parsed.city,
+          parsed.department, parsed.department_3rd, parsed.location,
           parsed.headcount, parsed.urgency, parsed.status,
           parsed.description, parsed.requirements,
           parsed.responsible_person, parsed.salary_range,
           parsed.primary_interviewer, parsed.secondary_interviewer,
+          parsed.capability_dimensions, parsed.personalized_requirements,
           now(), now()
         ).run();
         created++;
