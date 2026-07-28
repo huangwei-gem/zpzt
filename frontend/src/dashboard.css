@@ -1,24 +1,525 @@
-/* ==================== Dashboard Premium Animations ==================== */
+/* ============================================================
+   仪表盘 — 全新设计（taste-skill 风格）
+   留白翻倍 · spring 动效 · 微循环 · 有层次感
+   ============================================================ */
 
-/* Tabular figures for all numeric data */
-.dash-num {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum";
-}
-
-/* Custom spring easing curve */
+/* ---- 变量 ---- */
 :root {
+  --dash-surface: #ffffff;
+  --dash-bg: #F6F8FC;
+  --dash-text: #0F172A;
+  --dash-text-secondary: #64748B;
+  --dash-text-tertiary: #94A3B8;
+  --dash-border: #E8EDF4;
+  --dash-radius: 14px;
+  --dash-radius-sm: 10px;
   --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Staggered entrance: fade-up with blur */
+/* ---- 数字 tabular-nums ---- */
+.dash-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* =============== 页面容器 =============== */
+.dash-page {
+  padding: 20px 24px 40px;
+  min-height: 100vh;
+  position: relative;
+  background: var(--dash-bg);
+}
+
+/* 背景光晕 */
+.dash-bg-glow {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.dash-bg-glow::before {
+  content: '';
+  position: absolute;
+  width: 700px;
+  height: 700px;
+  top: -200px;
+  right: -150px;
+  background: radial-gradient(circle, rgba(59,130,246,0.06), transparent 70%);
+  animation: dashGlowDrift 40s ease-in-out infinite;
+}
+.dash-bg-glow::after {
+  content: '';
+  position: absolute;
+  width: 500px;
+  height: 500px;
+  bottom: -100px;
+  left: -100px;
+  background: radial-gradient(circle, rgba(139,92,246,0.05), transparent 70%);
+  animation: dashGlowDrift 30s ease-in-out infinite reverse;
+}
+@keyframes dashGlowDrift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(40px, -30px) scale(1.08); }
+  66% { transform: translate(-30px, 20px) scale(0.95); }
+}
+
+/* =============== 头部 =============== */
+.dash-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--dash-border);
+}
+.dash-header-left {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+.dash-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--dash-text);
+  letter-spacing: -0.3px;
+}
+.dash-updated {
+  font-size: 13px;
+  color: var(--dash-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.dash-btn-secondary {
+  border-radius: var(--dash-radius-sm) !important;
+  border: 1px solid var(--dash-border) !important;
+  background: var(--dash-surface) !important;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.02) !important;
+  transition: all 0.25s var(--ease-spring) !important;
+}
+.dash-btn-secondary:hover {
+  border-color: #3B82F6 !important;
+  color: #3B82F6 !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59,130,246,0.12) !important;
+}
+
+/* =============== Section =============== */
+.dash-section {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 24px;
+}
+
+/* ====== Grid 布局：模块卡片 ====== */
+.dash-grid-modules {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+/* ====== Grid 布局：核心指标卡片 ====== */
+.dash-grid-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+/* =============== 模块入口卡片 =============== */
+.dash-module-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--dash-radius);
+  padding: 14px 14px 12px;
+  background: var(--dash-surface);
+  border: 1px solid var(--dash-border);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: all 0.35s var(--ease-spring);
+  animation: dashFadeUp 0.5s var(--ease-spring) both;
+  height: 100%;
+  min-height: 64px;
+}
+.dash-module-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--card-color, #3B82F6);
+  box-shadow: 0 8px 24px -6px rgba(0,0,0,0.08), 0 0 0 1px var(--card-color, #3B82F6) inset;
+}
+.dash-module-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  flex-shrink: 0;
+  transition: transform 0.35s var(--ease-spring);
+}
+.dash-module-card:hover .dash-module-icon {
+  transform: scale(1.08);
+}
+.dash-module-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.dash-module-label {
+  font-size: 12px;
+  color: var(--dash-text-secondary);
+  line-height: 1.3;
+}
+.dash-module-count {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--dash-text);
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.dash-module-sub {
+  font-size: 11px;
+  color: var(--dash-text-tertiary);
+  line-height: 1.2;
+  margin-top: 1px;
+}
+.dash-module-glow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 0.35s var(--ease-spring);
+  pointer-events: none;
+  border-radius: var(--dash-radius);
+}
+.dash-module-card:hover .dash-module-glow {
+  opacity: 1;
+}
+
+/* =============== 核心指标卡 =============== */
+.dash-kpi-card {
+  background: var(--dash-surface);
+  border: 1px solid var(--dash-border);
+  border-radius: var(--dash-radius-sm);
+  padding: 10px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  animation: dashFadeUp 0.5s var(--ease-spring) both;
+  transition: all 0.3s var(--ease-spring);
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+}
+.dash-kpi-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3px;
+  height: 100%;
+  background: var(--kpi-color, #3B82F6);
+  border-radius: 0 2px 2px 0;
+  opacity: 0.5;
+}
+.dash-kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px -6px rgba(0,0,0,0.07);
+}
+.dash-kpi-icon {
+  font-size: 14px;
+}
+.dash-kpi-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--dash-text);
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.dash-kpi-num {
+  font-variant-numeric: tabular-nums;
+}
+.dash-kpi-label {
+  font-size: 11px;
+  color: var(--dash-text-secondary);
+  line-height: 1.3;
+}
+
+/* =============== 面板（漏斗/事业部/表格外层） =============== */
+.dash-panel {
+  background: var(--dash-surface);
+  border: 1px solid var(--dash-border);
+  border-radius: var(--dash-radius);
+  padding: 18px 20px 16px;
+  transition: box-shadow 0.3s var(--ease-spring);
+  position: relative;
+  z-index: 1;
+}
+.dash-panel:hover {
+  box-shadow: 0 4px 20px -6px rgba(0,0,0,0.04);
+}
+.dash-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.dash-panel-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--dash-text);
+}
+.dash-panel-badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--dash-text-tertiary);
+  background: #F1F5F9;
+  padding: 2px 10px;
+  border-radius: 20px;
+}
+.dash-panel-empty {
+  padding: 32px 0;
+  text-align: center;
+  color: var(--dash-text-tertiary);
+  font-size: 14px;
+}
+
+/* =============== 漏斗 =============== */
+.dash-funnel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.dash-funnel-row {
+  animation: dashFadeUp 0.5s var(--ease-spring) both;
+}
+.dash-funnel-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  margin-bottom: 5px;
+  color: var(--dash-text);
+  font-weight: 500;
+}
+.dash-funnel-num {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.dash-funnel-bar-track {
+  height: 10px;
+  background: #F1F5F9;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.dash-funnel-bar-fill {
+  height: 100%;
+  border-radius: 6px;
+  animation: dashBarGrow 0.7s var(--ease-spring) both;
+  transform-origin: left;
+}
+.dash-funnel-summary {
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: #F8FAFC;
+  border-radius: 8px;
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--dash-text-secondary);
+}
+.dash-funnel-summary strong {
+  color: var(--dash-text);
+  font-weight: 600;
+}
+
+@keyframes dashBarGrow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+/* =============== 事业部卡片 =============== */
+.dash-div-card {
+  padding: 14px 16px;
+  background: #FAFBFC;
+  border: 1px solid var(--dash-border);
+  border-radius: 12px;
+  transition: all 0.3s var(--ease-spring);
+  animation: dashFadeUp 0.5s var(--ease-spring) both;
+  height: 100%;
+}
+.dash-div-card:hover {
+  background: var(--dash-surface);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px -8px rgba(0,0,0,0.06);
+  border-color: #D0D9E6;
+}
+.dash-div-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.dash-div-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dash-div-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--dash-text);
+  line-height: 1.3;
+}
+.dash-div-hrbp {
+  font-size: 11px;
+  color: var(--dash-text-secondary);
+  margin-top: 1px;
+}
+.dash-div-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+}
+.dash-div-metric {
+  text-align: center;
+}
+.dash-div-m-val {
+  display: block;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.dash-div-m-label {
+  font-size: 10px;
+  color: var(--dash-text-tertiary);
+  display: block;
+  margin-top: 1px;
+}
+
+/* =============== 表格 =============== */
+.dash-table .ant-table {
+  border-radius: 10px !important;
+}
+.dash-table .ant-table-thead > tr > th {
+  background: #F8FAFC !important;
+  font-weight: 600 !important;
+  font-size: 12px !important;
+  color: var(--dash-text-secondary) !important;
+  padding: 8px 10px !important;
+  border-bottom: 1px solid var(--dash-border) !important;
+}
+.dash-table .ant-table-tbody > tr > td {
+  padding: 6px 10px !important;
+  font-size: 12px !important;
+  border-bottom: 1px solid #F1F5F9 !important;
+  transition: background 0.2s var(--ease-smooth);
+}
+.dash-table .ant-table-tbody > tr:hover > td {
+  background: #F1F7FF !important;
+}
+.dash-table .ant-table-tbody > tr:nth-child(even) > td {
+  background: #FAFBFC;
+}
+.dash-table .ant-table-tbody > tr:nth-child(even):hover > td {
+  background: #F1F7FF !important;
+}
+
+/* =============== 搜索 & 筛选 =============== */
+.dash-search-input {
+  width: 180px !important;
+  height: 32px !important;
+  border-radius: 8px !important;
+  border: 1px solid var(--dash-border) !important;
+  font-size: 12px !important;
+  transition: all 0.25s var(--ease-spring) !important;
+}
+.dash-search-input:focus {
+  border-color: #3B82F6 !important;
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.08) !important;
+}
+.dash-select-mini {
+  width: 120px !important;
+  border-radius: 8px !important;
+}
+.dash-select-mini .ant-select-selector {
+  border-radius: 8px !important;
+  border-color: var(--dash-border) !important;
+  height: 32px !important;
+  font-size: 12px !important;
+}
+.dash-total-badge {
+  font-size: 12px;
+  color: var(--dash-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* =============== 空态 =============== */
+.dash-empty {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  text-align: center;
+}
+.dash-empty-icon {
+  font-size: 56px;
+  margin-bottom: 16px;
+  opacity: 0.6;
+}
+.dash-empty h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--dash-text);
+  margin: 0 0 8px;
+}
+
+/* =============== 骨架屏 =============== */
+.dash-skeleton-card {
+  height: 68px;
+  border-radius: var(--dash-radius);
+  background: linear-gradient(90deg, #EEF2F6 25%, #E4E9F0 50%, #EEF2F6 75%);
+  background-size: 200% 100%;
+  animation: dashShimmer 1.8s infinite;
+}
+.dash-skeleton-mini {
+  height: 80px;
+  border-radius: var(--dash-radius-sm);
+  background: linear-gradient(90deg, #EEF2F6 25%, #E4E9F0 50%, #EEF2F6 75%);
+  background-size: 200% 100%;
+  animation: dashShimmer 1.8s infinite;
+}
+.dash-skeleton-block {
+  border-radius: var(--dash-radius);
+  background: linear-gradient(90deg, #EEF2F6 25%, #E4E9F0 50%, #EEF2F6 75%);
+  background-size: 200% 100%;
+  animation: dashShimmer 1.8s infinite;
+}
+@keyframes dashShimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* =============== 入场动画 =============== */
 @keyframes dashFadeUp {
   from {
     opacity: 0;
-    transform: translateY(24px);
-    filter: blur(6px);
+    transform: translateY(16px);
+    filter: blur(4px);
   }
   to {
     opacity: 1;
@@ -27,488 +528,26 @@
   }
 }
 
-@keyframes dashFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+/* =============== 响应式微调 =============== */
+@media (max-width: 768px) {
+  .dash-page { padding: 16px 12px; }
+  .dash-header { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .dash-grid-modules { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+  .dash-grid-kpis { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+  .dash-search-input { width: 140px !important; }
+  .dash-select-mini { width: 90px !important; }
+  .dash-panel-header { flex-wrap: wrap; gap: 8px; }
 }
 
-@keyframes dashScaleIn {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@keyframes dashSlideLeft {
-  from {
-    opacity: 0;
-    transform: translateX(-20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes dashSlideRight {
-  from {
-    opacity: 0;
-    transform: translateX(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes dashBarGrow {
-  from { transform: scaleX(0); }
-  to { transform: scaleX(1); }
-}
-
-@keyframes dashPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
-}
-
-@keyframes dashShimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
-@keyframes dashFloat {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-6px); }
-}
-
-@keyframes dashGradientShift {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
-
-/* Animation utility classes */
-.dash-enter-up {
-  animation: dashFadeUp 0.7s var(--ease-spring) both;
-}
-.dash-enter-fade {
-  animation: dashFadeIn 0.6s var(--ease-out-expo) both;
-}
-.dash-enter-scale {
-  animation: dashScaleIn 0.5s var(--ease-spring) both;
-}
-.dash-enter-left {
-  animation: dashSlideLeft 0.6s var(--ease-out-expo) both;
-}
-.dash-enter-right {
-  animation: dashSlideRight 0.6s var(--ease-out-expo) both;
-}
-
-/* Staggered delays */
-.dash-delay-1 { animation-delay: 0.05s; }
-.dash-delay-2 { animation-delay: 0.12s; }
-.dash-delay-3 { animation-delay: 0.19s; }
-.dash-delay-4 { animation-delay: 0.26s; }
-.dash-delay-5 { animation-delay: 0.33s; }
-.dash-delay-6 { animation-delay: 0.40s; }
-.dash-delay-7 { animation-delay: 0.47s; }
-.dash-delay-8 { animation-delay: 0.54s; }
-
-/* Premium stat card */
-.dash-stat-card {
-  position: relative;
-  overflow: hidden;
-  border-radius: 16px;
-  background: var(--surface-color);
-  border: 1px solid var(--border-color);
-  transition: transform 0.4s var(--ease-spring), box-shadow 0.4s var(--ease-spring);
-  will-change: transform;
-}
-
-.dash-stat-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  border-radius: 16px 16px 0 0;
-  opacity: 0.85;
-}
-
-.dash-stat-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 12px 24px -8px rgba(0, 0, 0, 0.12), 0 4px 8px -4px rgba(0, 0, 0, 0.06);
-}
-
-.dash-stat-card .dash-icon-wrap {
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform 0.4s var(--ease-spring);
-}
-
-.dash-stat-card:hover .dash-icon-wrap {
-  transform: scale(1.08);
-}
-
-/* Accent bar colors */
-.dash-accent-blue::before { background: linear-gradient(90deg, #3B82F6, #60A5FA); }
-.dash-accent-red::before { background: linear-gradient(90deg, #EF4444, #F87171); }
-.dash-accent-green::before { background: linear-gradient(90deg, #10B981, #34D399); }
-.dash-accent-purple::before { background: linear-gradient(90deg, #8B5CF6, #A78BFA); }
-.dash-accent-amber::before { background: linear-gradient(90deg, #F59E0B, #FBBF24); }
-.dash-accent-cyan::before { background: linear-gradient(90deg, #06B6D4, #22D3EE); }
-.dash-accent-pink::before { background: linear-gradient(90deg, #EC4899, #F472B6); }
-.dash-accent-lime::before { background: linear-gradient(90deg, #84CC16, #A3E635); }
-
-/* Glassmorphism panel */
-.dash-glass {
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(16px) saturate(1.4);
-  -webkit-backdrop-filter: blur(16px) saturate(1.4);
-  border: 1px solid rgba(226, 232, 240, 0.6);
-}
-
-/* Bento grid */
-.dash-bento {
-  display: grid;
-  grid-template-columns: repeat(12, 1fr);
-  gap: 20px;
-}
-
-/* Funnel bar animation */
-.dash-funnel-bar {
-  transform-origin: left center;
-  animation: dashBarGrow 0.8s var(--ease-spring) both;
-  border-radius: 8px;
-  transition: filter 0.3s var(--ease-smooth);
-}
-
-.dash-funnel-bar:hover {
-  filter: brightness(1.08);
-}
-
-/* Chart container entrance */
-.dash-chart-enter {
-  animation: dashScaleIn 0.6s var(--ease-spring) 0.3s both;
-}
-
-/* Shimmer skeleton */
-.dash-shimmer {
-  background: linear-gradient(90deg, #F1F5F9 25%, #E2E8F0 50%, #F1F5F9 75%);
-  background-size: 200% 100%;
-  animation: dashShimmer 1.5s infinite;
-  border-radius: 8px;
-}
-
-/* Floating indicator */
-.dash-trend-up {
-  color: #10B981;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 13px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.dash-trend-down {
-  color: #EF4444;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 13px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.dash-trend-flat {
-  color: var(--text-tertiary);
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 13px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-}
-
-/* HR overview mini cards */
-.dash-mini-card {
-  text-align: center;
-  border-radius: 12px;
-  padding: 20px 12px;
-  transition: transform 0.3s var(--ease-spring);
-  border: 1px solid transparent;
-}
-
-.dash-mini-card:hover {
-  transform: translateY(-3px);
-  border-color: var(--border-color);
-}
-
-/* Progress bar entrance */
-.dash-progress .ant-progress-bg {
-  transition: width 1s var(--ease-spring) !important;
-}
-
-/* Reduced motion */
+/* =============== 减少动效 =============== */
 @media (prefers-reduced-motion: reduce) {
-  .dash-enter-up,
-  .dash-enter-fade,
-  .dash-enter-scale,
-  .dash-enter-left,
-  .dash-enter-right,
-  .dash-funnel-bar,
-  .dash-chart-enter {
+  .dash-module-card,
+  .dash-kpi-card,
+  .dash-div-card,
+  .dash-funnel-row,
+  .dash-funnel-bar-fill,
+  .dash-bg-glow::before,
+  .dash-bg-glow::after {
     animation: none !important;
-  }
-  .dash-stat-card:hover {
-    transform: none;
-  }
-}
-/* ==================== Enhanced Dashboard Animations ==================== */
-
-/* Animated gradient orb background */
-.dash-bg-orbs {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.dash-orb {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(100px);
-  opacity: 0.08;
-  animation: dashOrbFloat 30s ease-in-out infinite;
-}
-
-.dash-orb-1 {
-  width: 500px;
-  height: 500px;
-  background: radial-gradient(circle, #3B82F6, transparent 70%);
-  top: -150px;
-  left: -100px;
-  animation-delay: 0s;
-}
-
-.dash-orb-2 {
-  width: 400px;
-  height: 400px;
-  background: radial-gradient(circle, #8B5CF6, transparent 70%);
-  top: 250px;
-  right: -120px;
-  animation-delay: -7s;
-}
-
-.dash-orb-3 {
-  width: 350px;
-  height: 350px;
-  background: radial-gradient(circle, #10B981, transparent 70%);
-  bottom: -80px;
-  left: 30%;
-  animation-delay: -14s;
-}
-
-@keyframes dashOrbFloat {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(30px, -40px) scale(1.05); }
-  66% { transform: translate(-20px, 30px) scale(0.95); }
-}
-
-/* 3D Card tilt on hover */
-.dash-tilt {
-  transition: transform 0.4s var(--ease-spring), box-shadow 0.4s var(--ease-spring);
-  transform-style: preserve-3d;
-  will-change: transform;
-}
-
-.dash-tilt:hover {
-  transform: perspective(800px) rotateX(2deg) rotateY(-2deg) translateY(-4px);
-  box-shadow: 0 20px 40px -12px rgba(0, 0, 0, 0.15), 0 8px 16px -8px rgba(0, 0, 0, 0.08);
-}
-
-/* Glow effects for number values */
-.dash-glow-blue { text-shadow: 0 0 20px rgba(59, 130, 246, 0.25); }
-.dash-glow-green { text-shadow: 0 0 20px rgba(16, 185, 129, 0.25); }
-.dash-glow-red { text-shadow: 0 0 20px rgba(239, 68, 68, 0.25); }
-.dash-glow-purple { text-shadow: 0 0 20px rgba(139, 92, 246, 0.25); }
-.dash-glow-amber { text-shadow: 0 0 20px rgba(245, 158, 11, 0.25); }
-
-/* Pulsing glow ring on icon */
-@keyframes dashIconPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.2); }
-  50% { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0); }
-}
-
-.dash-icon-pulse {
-  animation: dashIconPulse 2.5s ease-in-out infinite;
-}
-
-/* Staggered table row entrance */
-@keyframes dashRowSlide {
-  from {
-    opacity: 0;
-    transform: translateX(-12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-.dash-table-stagger .ant-table-tbody > tr {
-  animation: dashRowSlide 0.4s var(--ease-out-expo) both;
-}
-
-.dash-table-stagger .ant-table-tbody > tr:nth-child(1) { animation-delay: 0.05s; }
-.dash-table-stagger .ant-table-tbody > tr:nth-child(2) { animation-delay: 0.10s; }
-.dash-table-stagger .ant-table-tbody > tr:nth-child(3) { animation-delay: 0.15s; }
-.dash-table-stagger .ant-table-tbody > tr:nth-child(4) { animation-delay: 0.20s; }
-.dash-table-stagger .ant-table-tbody > tr:nth-child(5) { animation-delay: 0.25s; }
-.dash-table-stagger .ant-table-tbody > tr:nth-child(6) { animation-delay: 0.30s; }
-.dash-table-stagger .ant-table-tbody > tr:nth-child(7) { animation-delay: 0.35s; }
-.dash-table-stagger .ant-table-tbody > tr:nth-child(8) { animation-delay: 0.40s; }
-
-/* Animated gradient border */
-@keyframes dashBorderFlow {
-  0% { background-position: 0% 50%; }
-  100% { background-position: 200% 50%; }
-}
-
-.dash-gradient-border {
-  position: relative;
-  background: var(--surface-color);
-  border-radius: 16px;
-}
-
-.dash-gradient-border::before {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  border-radius: 17px;
-  padding: 1px;
-  background: linear-gradient(135deg, #3B82F6, #8B5CF6, #10B981, #3B82F6);
-  background-size: 200% 200%;
-  animation: dashBorderFlow 4s linear infinite;
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
-}
-
-/* Smooth tab content transition */
-@keyframes dashTabEnter {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.dash-tab-content {
-  animation: dashTabEnter 0.35s var(--ease-spring) both;
-}
-
-/* Floating icon animation */
-.dash-icon-float {
-  animation: dashFloat 3s ease-in-out infinite;
-}
-
-/* Recharts enhanced tooltip */
-.dash-chart-tooltip .recharts-default-tooltip {
-  border-radius: 12px !important;
-  border: 1px solid #E2E8F0 !important;
-  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.12) !important;
-  padding: 12px 16px !important;
-}
-
-/* Progress bar glow */
-.dash-progress-glow .ant-progress-bg {
-  box-shadow: 0 0 12px currentColor;
-  filter: brightness(1.1);
-}
-
-/* Counter finish burst */
-@keyframes dashBurst {
-  0% { transform: scale(1); }
-  50% { transform: scale(1.05); }
-  100% { transform: scale(1); }
-}
-
-.dash-burst {
-  animation: dashBurst 0.4s var(--ease-spring);
-}
-
-/* Section divider with gradient */
-.dash-divider {
-  height: 1px;
-  background: linear-gradient(90deg, transparent, #E2E8F0, transparent);
-  margin: 24px 0;
-}
-
-/* Metric card hover glow */
-.dash-metric-glow {
-  position: relative;
-  overflow: hidden;
-  transition: all 0.4s var(--ease-spring);
-}
-
-.dash-metric-glow::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
-  transition: left 0.6s var(--ease-spring);
-}
-
-.dash-metric-glow:hover::after {
-  left: 100%;
-}
-
-/* Enhanced antd Tabs */
-.dash-tabs .ant-tabs-tab {
-  transition: all 0.3s var(--ease-spring) !important;
-  padding: 8px 16px !important;
-}
-
-.dash-tabs .ant-tabs-tab:hover {
-  transform: translateY(-1px);
-}
-
-.dash-tabs .ant-tabs-ink-bar {
-  background: linear-gradient(90deg, #3B82F6, #8B5CF6) !important;
-  height: 3px !important;
-  border-radius: 3px !important;
-}
-
-/* Reduced motion */
-@media (prefers-reduced-motion: reduce) {
-  .dash-orb,
-  .dash-icon-float,
-  .dash-icon-pulse,
-  .dash-gradient-border::before,
-  .dash-table-stagger .ant-table-tbody > tr,
-  .dash-tab-content {
-    animation: none !important;
-  }
-  .dash-tilt:hover {
-    transform: none;
   }
 }
