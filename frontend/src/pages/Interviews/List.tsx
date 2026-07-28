@@ -54,6 +54,8 @@ interface MergedRow {
   interviewer: string;
   primary_interviewer: string;
   secondary_interviewer: string;
+  create_time: string | null;
+  biz_owner: string;
 }
 
 const InterviewsList: React.FC = () => {
@@ -101,9 +103,9 @@ const InterviewsList: React.FC = () => {
   const fetchMergedData = useCallback(async () => {
     setLoading(true);
     try {
-      // 同时拉候选人 + 面试记录
+      // 同时拉候选人（从简历管理已入库的）+ 面试记录
       const [candidates, interviews] = await Promise.all([
-        request.get('/talent-pool', { params: { candidate_name: search || undefined } }).catch(() => []),
+        request.get('/interviews/pipeline-candidates', { params: { candidate_name: search || undefined } }).catch(() => []),
         request.get('/interviews').catch(() => []),
       ]);
 
@@ -145,7 +147,16 @@ const InterviewsList: React.FC = () => {
           interviewer: matchedIv?.interviewer || '',
           primary_interviewer: matchedIv?.primary_interviewer || '',
           secondary_interviewer: matchedIv?.secondary_interviewer || '',
+          create_time: c.create_time || null,
+          biz_owner: c.biz_owner || '',
         };
+      });
+
+      // 按入库时间倒序（最新在前）
+      merged.sort((a: any, b: any) => {
+        const ta = a.create_time ? new Date(a.create_time).getTime() : 0;
+        const tb = b.create_time ? new Date(b.create_time).getTime() : 0;
+        return tb - ta;
       });
 
       // 过滤状态下拉
@@ -158,6 +169,11 @@ const InterviewsList: React.FC = () => {
         filtered = merged.filter(r => r.interview_status === 'completed');
       } else if (filterStatus === 'approved') {
         filtered = merged.filter(r => r.talent_status === 'approved');
+      }
+
+      // 非管理员只看自己负责的候选人
+      if (user?.role !== 'admin' && user?.full_name) {
+        filtered = filtered.filter(r => r.biz_owner === user.full_name);
       }
 
       setData(filtered);

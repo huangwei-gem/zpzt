@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Form, Input, Button, Card, message, Select, Typography, Tag } from 'antd';
+import { Form, Input, Button, Card, message, Select, Typography, Tag, Space } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
-import { RobotOutlined, ArrowLeftOutlined } from '@ant-design/icons';
+import { RobotOutlined, ArrowLeftOutlined, PlusOutlined, MinusCircleOutlined, AppstoreOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import JDGeneratorModal from '../../components/JDGeneratorModal';
 
@@ -15,6 +15,7 @@ const PositionForm: React.FC = () => {
   const [users, setUsers] = useState<any[]>([]);
   const [jdModalVisible, setJdModalVisible] = useState(false);
   const [allDimensionNames, setAllDimensionNames] = useState<string[]>([]);
+  const [dimCollapsed, setDimCollapsed] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     if (id) {
@@ -27,9 +28,15 @@ const PositionForm: React.FC = () => {
   const fetchPosition = async (positionId: string) => {
     try {
       const res = await request.get(`/positions/${positionId}`);
-      // 解析 capability_dimensions JSON 字符串为数组
+      // 解析 capability_dimensions JSON 字符串 → 对象数组
       if (typeof res.capability_dimensions === 'string') {
-        try { res.capability_dimensions = JSON.parse(res.capability_dimensions); } catch { res.capability_dimensions = []; }
+        try {
+          const parsed = JSON.parse(res.capability_dimensions);
+          // 兼容旧数据：纯字符串数组 → 对象数组
+          res.capability_dimensions = Array.isArray(parsed)
+            ? parsed.map((d: any) => typeof d === 'string' ? { name: d, description: '' } : d)
+            : [];
+        } catch { res.capability_dimensions = []; }
       }
       form.setFieldsValue(res);
     } catch (error) {
@@ -68,17 +75,16 @@ const PositionForm: React.FC = () => {
     }
   };
 
-  const handleJDConfirm = (description: string, requirements: string) => {
+  const handleJDConfirm = (description: string) => {
     form.setFieldsValue({
-      description,
-      requirements
+      description
     });
   };
 
   const onFinish = async (values: any) => {
     setLoading(true);
     try {
-      // capability_dimensions 是数组，序列化为 JSON 字符串
+      // capability_dimensions 是对象数组，序列化为 JSON 字符串
       if (Array.isArray(values.capability_dimensions)) {
         values.capability_dimensions = JSON.stringify(values.capability_dimensions);
       }
@@ -227,12 +233,6 @@ const PositionForm: React.FC = () => {
             <Input.TextArea rows={6} placeholder="请输入详细的岗位职责描述" showCount maxLength={2000} />
           </Form.Item>
 
-          <Form.Item
-            name="requirements"
-            label="任职要求"
-          >
-            <Input.TextArea rows={6} placeholder="请输入任职资格要求" showCount maxLength={2000} />
-          </Form.Item>
 
           {/* 状态 + 空列 */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: 8 }}>
@@ -249,15 +249,80 @@ const PositionForm: React.FC = () => {
             <div /> {/* 占位对齐 */}
           </div>
 
-          <Form.Item name="capability_dimensions" label="能力维度（多选）" style={{ marginBottom: 8 }}>
-            <Select
-              mode="multiple"
-              size="large"
-              placeholder="选择已有能力维度，或直接输入新维度名称"
-              tokenSeparators={[',']}
-              options={allDimensionNames.map(n => ({ label: n, value: n }))}
-            />
-          </Form.Item>
+          <div style={{ marginTop: 16 }}>
+            <Text strong style={{ fontSize: 14 }}>
+              <AppstoreOutlined style={{ marginRight: 6 }} />
+              能力维度（多选）
+            </Text>
+            <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+              添加该岗位需要考察的各个能力维度
+            </Text>
+          </div>
+          <Form.List name="capability_dimensions">
+            {(fields, { add, remove }) => (
+              <>
+                {fields.map(({ key, name, ...restField }, index) => (
+                    <div
+                      key={key}
+                      style={{
+                        padding: '12px 16px',
+                        marginTop: 12,
+                        border: '1px solid #E2E8F0',
+                        borderRadius: 8,
+                        background: '#FAFBFC',
+                        position: 'relative'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <Form.Item
+                          {...restField}
+                          name={[name, 'name']}
+                          rules={[{ required: true, message: '请输入维度名称' }]}
+                          style={{ marginBottom: 0, flex: 1, marginRight: 8 }}
+                        >
+                          <Input
+                            placeholder="维度名称，如：AI能力强"
+                            variant="borderless"
+                            style={{
+                              fontWeight: 600,
+                              fontSize: 15,
+                              padding: 0,
+                              background: 'transparent',
+                              width: '100%'
+                            }}
+                          />
+                        </Form.Item>
+                        {fields.length > 1 && (
+                          <Button
+                            type="text"
+                            danger
+                            size="small"
+                            icon={<MinusCircleOutlined />}
+                            onClick={() => remove(name)}
+                          />
+                        )}
+                      </div>
+                      <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 10 }}>
+                        <Form.Item
+                          {...restField}
+                          name={[name, 'description']}
+                          style={{ marginBottom: 0 }}
+                        >
+                          <Input.TextArea rows={2} placeholder="该维度的具体描述，如：他会cc会codex" showCount maxLength={500} variant="filled" />
+                        </Form.Item>
+                      </div>
+                    </div>
+                  ))}
+                {fields.length < 10 && (
+                  <div style={{ marginTop: 12 }}>
+                    <Button type="dashed" onClick={() => add({ name: '', description: '' })} block icon={<PlusOutlined />}>
+                      添加维度
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+          </Form.List>
 
           <Form.Item style={{ marginTop: 32 }}>
             <Button type="primary" htmlType="submit" loading={loading} size="large">

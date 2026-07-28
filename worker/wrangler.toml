@@ -17,6 +17,8 @@ binding = "DB"
 database_name = "ai-interview-db"
 database_id = "0eb6cbc3-93c7-4c9d-b933-57ff01a191cb"
 
-# Cron triggers - 每天凌晨 3 点自动清理超过 7 天的 PDF 缓存
+# Cron triggers
+# - 每 30 分钟刷新飞书 user_access_token（防止 token 过期导致面试提醒失败）
+# - 每天凌晨 3 点自动清理超过 7 天的 PDF 缓存
 [triggers]
-crons = ["0 3 * * *"]
+crons = ["*/30 * * * *", "0 3 * * *"]

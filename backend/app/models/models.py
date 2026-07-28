@@ -58,6 +58,8 @@ class Position(Base):
     responsible_person = Column(String, nullable=True)
     personalized_requirements = Column(Text, nullable=True)
     capability_dimensions = Column(Text, nullable=True, default='[]')
+    primary_interviewer = Column(String, nullable=True, default='杜雁玲')
+    secondary_interviewer = Column(String, nullable=True, default='何雨菱')
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     

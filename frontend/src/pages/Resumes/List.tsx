@@ -63,11 +63,6 @@ const ResumesList: React.FC = () => {
   const dataCache = useRef<any[]>([]);
   const loadedRef = useRef(false);
 
-  // 统计卡片（基于筛选后的 data 实时计算）
-  const statsOffer = useMemo(() => data.filter((r: any) => r.status === 'offer_pending' || r.status === 'offer_accepted' || r.status === 'offer_rejected').length, [data]);
-  const statsPendingOnboard = useMemo(() => data.filter((r: any) => r.status === 'onboarding').length, [data]);
-  const statsCompletedOnboard = useMemo(() => data.filter((r: any) => r.status === 'completed' || r.status === 'offer_accepted').length, [data]);
-
   // 能力维度（评估依据）
   const [capDims, setCapDims] = useState<Record<string, any>>({});
   const fetchCapDims = async () => {
@@ -86,6 +81,44 @@ const ResumesList: React.FC = () => {
       });
       setCapDims(map);
     } catch {}
+  };
+
+  // 飞书导入
+  const [feishuImporting, setFeishuImporting] = useState(false);
+
+  const handleFeishuImport = async () => {
+    Modal.confirm({
+      title: '从飞书人才库导入',
+      content: (
+        <div>
+          <p style={{ marginBottom: 8 }}>✅ 将通过飞书机器人直接从多维表格抓取人才库数据，包括：</p>
+          <ul style={{ paddingLeft: 20, marginBottom: 12 }}>
+            <li>候选人基本信息（姓名、岗位、学历、城市等）</li>
+            <li>AI 简历评估结果（初筛、匹配分、优劣势）</li>
+            <li>PDF 简历附件（自动缓存到本地，支持在线预览）</li>
+          </ul>
+          <p style={{ color: '#faad14' }}>⚠️ 已导入过的简历不会重复导入</p>
+        </div>
+      ),
+      okText: '开始导入',
+      cancelText: '取消',
+      onOk: async () => {
+        setFeishuImporting(true);
+        try {
+          const res = await request.post('/resumes/import-from-feishu', {});
+          const msg = res.errors?.length > 0
+            ? `导入完成：成功 ${res.imported} 条，跳过 ${res.skipped} 条，失败 ${res.failed} 条\nPDF缓存：成功 ${res.pdf_cached} 个，失败 ${res.pdf_failed} 个\n\n部分错误：${res.errors.slice(0, 5).join('\n')}`
+            : `✅ 导入完成\n\n成功导入 ${res.imported} 条简历\n跳过（已存在）${res.skipped} 条\n失败 ${res.failed} 条\n\nPDF 缓存：成功 ${res.pdf_cached} 个，失败 ${res.pdf_failed} 个`;
+          message.success(`飞书导入完成，共导入 ${res.imported} 条`);
+          Modal.success({ title: '飞书导入结果', content: <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 400, overflow: 'auto' }}>{msg}</pre> });
+          fetchResumes();
+        } catch (err: any) {
+          message.error('飞书导入失败: ' + (err.response?.data?.detail || err.message));
+        } finally {
+          setFeishuImporting(false);
+        }
+      },
+    });
   };
 
   // BOSS 导入
@@ -257,10 +290,9 @@ const ResumesList: React.FC = () => {
       const params: any = {};
       if (searchName) params.candidate_name = searchName;
       if (searchStatus) params.status = searchStatus;
-      if (searchPerson) params.responsible_person = searchPerson;
 
       // 没有任何筛选条件时尝试缓存（有任一筛选条件则跳过缓存）
-      if (!searchName && !searchStatus && !searchPerson && !searchPosition) {
+      if (!searchName && !searchStatus && !searchPosition) {
         const cachedTime = sessionStorage.getItem(RESUMES_CACHE_TIME_KEY);
         const now = Date.now();
         if (cachedTime && (now - parseInt(cachedTime)) < CACHE_TTL) {
@@ -295,7 +327,7 @@ const ResumesList: React.FC = () => {
       loadedRef.current = true;
 
       // 没有任何筛选条件时才写缓存
-      if (!searchName && !searchStatus && !searchPerson && !searchPosition) {
+      if (!searchName && !searchStatus && !searchPosition) {
         try {
           sessionStorage.setItem(RESUMES_CACHE_KEY, JSON.stringify(res));
           sessionStorage.setItem(RESUMES_CACHE_TIME_KEY, String(Date.now()));
@@ -724,7 +756,7 @@ const ResumesList: React.FC = () => {
     ));
     try {
       await request.post(`/resumes/${record.id}/approve-to-talent-pool`);
-      message.success(`${record.candidate_name} 已入库`);
+      message.success(`${record.candidate_name} 已入库到面试流水线`);
     } catch (error: any) {
       message.error(error?.response?.data?.detail || '入库失败');
       // 回滚
@@ -740,6 +772,37 @@ const ResumesList: React.FC = () => {
     setIsModalVisible(true);
   };
 
+  /** 用 pdfjs 从 PDF 文件中提取纯文本（只取前 50K 字符） */
+  const extractTextFromPdf = async (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const arrayBuffer = e.target?.result as ArrayBuffer;
+          // 动态加载 pdfjs（节省初始包体积）
+          const pdfjsLib = await import('pdfjs-dist');
+          // 用 CDN worker 避免打包过大的 pdf.worker
+          pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+          let text = '';
+          for (let i = 1; i <= Math.min(pdf.numPages, 20); i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            text += content.items.map((item: any) => item.str).join(' ') + '\n\n';
+            // 限制总长度，避免内存溢出
+            if (text.length > 50000) break;
+          }
+          resolve(text.substring(0, 50000));
+        } catch (err) {
+          console.warn('[pdfjs] PDF文本提取失败，将走后端base64方案:', err);
+          resolve(''); // 返回空字符串，后端兜底
+        }
+      };
+      reader.onerror = () => resolve('');
+      reader.readAsArrayBuffer(file);
+    });
+  };
+
   const handleOk = async () => {
     try {
       const values = await form.validateFields();
@@ -749,36 +812,60 @@ const ResumesList: React.FC = () => {
       }
 
       setSubmitting(true);
-      
-      // Determine if single or batch upload
+      const hide = message.loading('正在提取PDF文本并上传...', 0);
+
+      // 单文件上传（含 pdfjs 提取的文本）
       if (fileList.length === 1) {
+        const file = fileList[0];
+        const pdfText = await extractTextFromPdf(file);
         const formData = new FormData();
         formData.append('position_id', values.position_id);
-        formData.append('file', fileList[0]);
-        await request.post('/resumes', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        });
-        message.success('简历上传成功，AI正在解析中...');
+        formData.append('file', file);
+        formData.append('pdf_text', pdfText); // 前端提取好的纯文本！
+        try {
+          await request.post('/resumes', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            timeout: 120000, // 2min - AI解析可能需要更长时间
+          });
+          hide();
+          message.success('✅ 简历上传成功，AI 正在解析中...');
+        } catch (err: any) {
+          hide();
+          // 如果后端不支持 pdf_text，降级为不带文本上传
+          if (err?.response?.status === 422) {
+            message.warning('正在使用标准方式上传...');
+            const fallbackForm = new FormData();
+            fallbackForm.append('position_id', values.position_id);
+            fallbackForm.append('file', file);
+            await request.post('/resumes', fallbackForm, {
+              headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            message.success('上传成功，AI解析中...');
+          } else {
+            throw err;
+          }
+        }
       } else {
+        // 批量上传（逐个提取文本）
         const formData = new FormData();
         formData.append('position_id', values.position_id);
-        fileList.forEach(file => {
+        for (const file of fileList) {
+          const pdfText = await extractTextFromPdf(file);
           formData.append('files', file);
-        });
+          formData.append('pdf_texts', pdfText);
+        }
         await request.post('/resumes/batch', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
+          headers: { 'Content-Type': 'multipart/form-data' },
+          timeout: 180000,
         });
-        message.success(`成功上传 ${fileList.length} 份简历，AI正在解析中...`);
+        hide();
+        message.success(`✅ 成功上传 ${fileList.length} 份简历，AI 正在解析中...`);
       }
 
       setIsModalVisible(false);
       fetchResumes();
-    } catch (error) {
-      message.error('上传失败');
+    } catch (error: any) {
+      message.error('上传失败: ' + (error?.response?.data?.detail || error.message || '未知错误'));
     } finally {
       setSubmitting(false);
     }
@@ -953,10 +1040,43 @@ const ResumesList: React.FC = () => {
     return details.length > 0 ? Math.round(details.reduce((s, d) => s + d.score, 0) / details.length * 10) / 10 : 0;
   };
 
+  /** 格式化入库时间（飞书 创建时间 → YYYY-MM-DD HH:mm） */
+  const formatCreateTime = (t: string | null): string => {
+    if (!t) return '';
+    try {
+      const d = new Date(t);
+      if (isNaN(d.getTime())) return t;
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    } catch { return t; }
+  };
+
+  // ---- 负责人筛选 ----
+  // 从 data 提取所有非空业务负责人
+  const allBizOwners = useMemo(() => {
+    const names = new Set<string>();
+    data.forEach((r: any) => { if (r.biz_owner) names.add(r.biz_owner); });
+    return [...names].sort();
+  }, [data]);
+
+  // 最终展示的数据：非管理员→只看自己的；管理员+选了负责人→只看该负责人的
+  const filteredData = useMemo(() => {
+    let list = data;
+    const isAdmin = user?.role === 'admin';
+    if (!isAdmin && user?.full_name) {
+      // 非管理员只看自己业务负责的
+      list = list.filter((r: any) => r.biz_owner === user.full_name);
+    }
+    if (isAdmin && searchPerson) {
+      list = list.filter((r: any) => r.biz_owner === searchPerson);
+    }
+    return list;
+  }, [data, searchPerson, user?.role, user?.full_name]);
+
   // 卡片分页
   const pageSize = 20;
   const [cardPage, setCardPage] = useState(1);
-  const pagedData = data.slice((cardPage - 1) * pageSize, cardPage * pageSize);
+  const pagedData = filteredData.slice((cardPage - 1) * pageSize, cardPage * pageSize);
 
   return (
     <div style={{ maxWidth: '100%' }}>
@@ -968,43 +1088,32 @@ const ResumesList: React.FC = () => {
         <Space size="small">
           <Button type="primary" icon={<PlusOutlined />} onClick={handleUploadClick}>上传简历</Button>
           <Button icon={<DownloadOutlined />} onClick={() => setBossImportOpen(true)}>BOSS导入</Button>
-          <Button icon={<CloudUploadOutlined />} onClick={() => {
-            Modal.info({
-              title: '飞书导入',
-              content: (
-                <div>
-                  <p>请先登录飞书后台，在「多维表格」中导出简历数据为 Excel 文件，然后使用「BOSS导入」功能上传。</p>
-                  <p>如需直接从飞书同步，请先配置飞书多维表格集成。</p>
-                </div>
-              ),
-              okText: '知道了',
-            });
-          }}>飞书导入</Button>
+          <Button icon={<CloudUploadOutlined />} loading={feishuImporting} onClick={handleFeishuImport}>飞书导入</Button>
           <Button icon={<ReloadOutlined />} onClick={() => { fetchResumes(); fetchPositions(); }}>刷新数据</Button>
           <Button icon={<RobotOutlined />} onClick={handleAutoEvaluateAll}>AI 工具</Button>
         </Space>
       </div>
 
-      {/* 统计卡片 — 指标卡片形式 */}
+      {/* 统计卡片 — 基于当前筛选结果 */}
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={6}>
           <Card size="small" style={{ borderRadius: 8, borderTop: '3px solid #1677ff' }}>
-            <Statistic title="总简历数" value={data.length} suffix="份" valueStyle={{ color: '#1677ff', fontWeight: 600 }} />
+            <Statistic title="总简历数" value={filteredData.length} suffix="份" valueStyle={{ color: '#1677ff', fontWeight: 600 }} />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small" style={{ borderRadius: 8, borderTop: '3px solid #722ed1' }}>
-            <Statistic title="待处理" value={data.filter((r: any) => r.status === 'pending_screening').length} suffix="人" valueStyle={{ color: '#722ed1', fontWeight: 600 }} />
+            <Statistic title="待处理" value={filteredData.filter((r: any) => r.status === 'pending_screening').length} suffix="人" valueStyle={{ color: '#722ed1', fontWeight: 600 }} />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small" style={{ borderRadius: 8, borderTop: '3px solid #52c41a' }}>
-            <Statistic title="已入库" value={data.filter((r: any) => r.status === 'approved' || r.status === 'talent_pool').length} suffix="人" valueStyle={{ color: '#52c41a', fontWeight: 600 }} />
+            <Statistic title="已入库" value={filteredData.filter((r: any) => r.status === 'approved').length} suffix="人" valueStyle={{ color: '#52c41a', fontWeight: 600 }} />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small" style={{ borderRadius: 8, borderTop: '3px solid #52c41a' }}>
-            <Statistic title="已入职" value={statsCompletedOnboard} suffix="人" valueStyle={{ color: '#52c41a', fontWeight: 600 }} />
+            <Statistic title="已入职" value={filteredData.filter((r: any) => r.status === 'completed' || r.status === 'offer_accepted').length} suffix="人" valueStyle={{ color: '#52c41a', fontWeight: 600 }} />
           </Card>
         </Col>
       </Row>
@@ -1035,15 +1144,16 @@ const ResumesList: React.FC = () => {
             </Form.Item>
             <Form.Item label="负责人">
               <Select
-                placeholder="全部负责人"
+                placeholder={user?.role === 'admin' ? "全部负责人" : "你的候选人"}
                 value={searchPerson}
-                onChange={val => { setSearchPerson(val); setTimeout(() => handleSearch(), 0); }}
+                onChange={val => { setSearchPerson(val); setCardPage(1); }}
                 style={{ width: 130 }}
                 allowClear
                 showSearch
                 optionFilterProp="children"
+                disabled={user?.role !== 'admin'}
               >
-                {responsiblePersons.map((name: string) => (
+                {allBizOwners.map((name: string) => (
                   <Select.Option key={name} value={name}>{name}</Select.Option>
                 ))}
               </Select>
@@ -1094,7 +1204,7 @@ const ResumesList: React.FC = () => {
           <SyncOutlined spin style={{ fontSize: 32, color: '#1677ff' }} />
           <p style={{ marginTop: 12, color: '#666' }}>加载中...</p>
         </div>
-      ) : data.length === 0 ? (
+      ) : filteredData.length === 0 ? (
         <Empty description="暂无简历数据" style={{ padding: 60 }} />
       ) : (
         <>
@@ -1128,6 +1238,12 @@ const ResumesList: React.FC = () => {
                       onClick={e => e.stopPropagation()}
                     />
                     <span style={{ fontWeight: 600, fontSize: 15 }}>{record.candidate_name || '未知'}</span>
+                    {/* 入库时间 */}
+                    {record.create_time && (
+                      <span style={{ color: '#bfbfbf', fontSize: 12 }}>
+                        🕐 {formatCreateTime(record.create_time)}
+                      </span>
+                    )}
                     <span style={{ color: '#8c8c8c', fontSize: 13 }}>
                       {[
                         cleanAge(record.age)?.replace('岁', '岁 · '),
@@ -1179,7 +1295,7 @@ const ResumesList: React.FC = () => {
             <Pagination
               current={cardPage}
               pageSize={pageSize}
-              total={data.length}
+              total={filteredData.length}
               showSizeChanger={false}
               showTotal={(t) => `共 ${t} 条`}
               onChange={(p) => setCardPage(p)}

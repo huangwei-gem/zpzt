@@ -1,4 +1,4 @@
-﻿/* ==================== Dashboard Premium Animations ==================== */
+/* ==================== Dashboard Premium Animations ==================== */
 
 /* Tabular figures for all numeric data */
 .dash-num {
@@ -288,34 +288,34 @@
 .dash-orb {
   position: absolute;
   border-radius: 50%;
-  filter: blur(80px);
-  opacity: 0.15;
-  animation: dashOrbFloat 20s ease-in-out infinite;
+  filter: blur(100px);
+  opacity: 0.08;
+  animation: dashOrbFloat 30s ease-in-out infinite;
 }
 
 .dash-orb-1 {
-  width: 400px;
-  height: 400px;
+  width: 500px;
+  height: 500px;
   background: radial-gradient(circle, #3B82F6, transparent 70%);
-  top: -100px;
-  left: -50px;
+  top: -150px;
+  left: -100px;
   animation-delay: 0s;
 }
 
 .dash-orb-2 {
-  width: 350px;
-  height: 350px;
+  width: 400px;
+  height: 400px;
   background: radial-gradient(circle, #8B5CF6, transparent 70%);
-  top: 200px;
-  right: -80px;
+  top: 250px;
+  right: -120px;
   animation-delay: -7s;
 }
 
 .dash-orb-3 {
-  width: 300px;
-  height: 300px;
+  width: 350px;
+  height: 350px;
   background: radial-gradient(circle, #10B981, transparent 70%);
-  bottom: -50px;
+  bottom: -80px;
   left: 30%;
   animation-delay: -14s;
 }

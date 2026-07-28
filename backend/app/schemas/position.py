@@ -19,6 +19,8 @@ class PositionBase(BaseModel):
     responsible_person: Optional[str] = None
     personalized_requirements: Optional[str] = None
     capability_dimensions: Optional[str] = None
+    primary_interviewer: Optional[str] = None
+    secondary_interviewer: Optional[str] = None
 
 class PositionCreate(PositionBase):
     pass
@@ -38,6 +40,8 @@ class PositionUpdate(BaseModel):
     responsible_person: Optional[str] = None
     personalized_requirements: Optional[str] = None
     capability_dimensions: Optional[str] = None
+    primary_interviewer: Optional[str] = None
+    secondary_interviewer: Optional[str] = None
 
 class PositionResponse(PositionBase):
     id: UUID

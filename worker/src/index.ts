@@ -449,6 +449,10 @@ app.get('/api/auth/feishu-callback', async (c) => {
     }
 
     const userAccessToken = tokenData.access_token || tokenData.data?.access_token;
+    const refreshToken = tokenData.refresh_token || tokenData.data?.refresh_token || '';
+    const tokenExpiresIn = tokenData.expires_in || tokenData.data?.expires_in || 7200;
+    const refreshTokenExpiresIn = tokenData.refresh_token_expires_in || tokenData.data?.refresh_token_expires_in || 604800;
+
     console.log(`[FeishuOAuth] token 交换成功, 获取用户信息...`);
 
     const userInfoResp = await fetch('https://open.feishu.cn/open-apis/authen/v1/user_info', {
@@ -466,8 +470,19 @@ app.get('/api/auth/feishu-callback', async (c) => {
     console.log(`[FeishuOAuth] 用户信息: openId=${feishuOpenId}, name=${feishuName}, 更新 ${userEmail}...`);
 
     if (feishuOpenId) {
+      // 更新 users 表
       await c.env.DB.prepare('UPDATE users SET feishu_open_id = ?, feishu_name = ?, feishu_token = ?, updated_at = ? WHERE email = ?')
         .bind(feishuOpenId, feishuName, userAccessToken, now(), userEmail).run();
+
+      // 同时存储到 feishu_tokens 表（含 refresh_token 和过期时间，用于自动刷新）
+      const tokenId = uuid();
+      const expiresAtUnix = Math.floor(Date.now() / 1000) + tokenExpiresIn;
+      // 先删旧记录再插入（feishu_tokens 的 user_email 无 UNIQUE 约束，用此方式实现 upsert）
+      await c.env.DB.prepare('DELETE FROM feishu_tokens WHERE user_email = ?').bind(userEmail).run();
+      await c.env.DB.prepare(`
+        INSERT INTO feishu_tokens (id, user_email, access_token, refresh_token, expires_at, open_id, name, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(tokenId, userEmail, userAccessToken, refreshToken, expiresAtUnix, feishuOpenId, feishuName, now()).run();
     }
 
     console.log(`[FeishuOAuth] 绑定成功, 跳转`);
@@ -759,12 +774,12 @@ app.get('/api/dashboard/hr-stats', authMiddleware, async (c) => {
   const totalReq = await db.prepare("SELECT COUNT(*) as cnt FROM job_requisitions").first();
   const pendingReq = await db.prepare("SELECT COUNT(*) as cnt FROM job_requisitions WHERE status = 'pending'").first();
   const approvedReq = await db.prepare("SELECT COUNT(*) as cnt FROM job_requisitions WHERE status = 'approved'").first();
-  const tpSize = await db.prepare("SELECT COUNT(*) as cnt FROM talent_pool").first();
+  const pipelineAccCnt = await db.prepare("SELECT COUNT(*) as cnt FROM resume_screening_queue WHERE status = 'approved'").first();
   const obCnt = await db.prepare("SELECT COUNT(*) as cnt FROM onboarding_records").first();
   const pbCnt = await db.prepare("SELECT COUNT(*) as cnt FROM probation_records").first();
   return c.json({
     total_requisitions: totalReq?.cnt || 0, pending_requisitions: pendingReq?.cnt || 0,
-    approved_requisitions: approvedReq?.cnt || 0, talent_pool_size: tpSize?.cnt || 0,
+    approved_requisitions: approvedReq?.cnt || 0, pipeline_candidates: pipelineAccCnt?.cnt || 0,
     onboarding_count: obCnt?.cnt || 0, probation_count: pbCnt?.cnt || 0
   });
 });
@@ -780,6 +795,54 @@ app.get('/api/dashboard/timeline', authMiddleware, async (c) => {
     });
   }
   return c.json(result);
+});
+
+// 模块指标聚合 API（按侧边菜单模块统计各自核心数量）
+app.get('/api/dashboard/module-stats', authMiddleware, async (c) => {
+  const db = c.env.DB;
+  const [
+    reqCnt, reqPending, reqApproved,
+    tpCnt,
+    posCnt, posActive, posOpen,
+    resumeCnt, resumePending, resumeScreening,
+    ivCnt, ivScheduled, ivToday,
+    onboardCnt, onboardPending, onboardHired,
+    probCnt, probActive,
+    userCnt, interviewerCnt,
+  ] = await Promise.all([
+    db.prepare("SELECT COUNT(*) as c FROM job_requisitions").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM job_requisitions WHERE status='pending'").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM job_requisitions WHERE status='approved'").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM resume_screening_queue WHERE status='approved'").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM positions").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM positions WHERE status IN ('open','published')").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM positions WHERE status='open'").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM resumes").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM resumes WHERE status LIKE 'pending%' OR status='new'").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM resumes WHERE status='screening'").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM interviews").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM interviews WHERE status='scheduled'").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM interviews WHERE date(interview_time)=date('now')").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM onboarding_records").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM onboarding_records WHERE status='pending'").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM onboarding_records WHERE status='onboarded'").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM probation_records").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM probation_records WHERE status='active' OR status='probation'").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM users WHERE is_active=1").first().catch(() => ({c:0})),
+    db.prepare("SELECT COUNT(*) as c FROM users WHERE role='interviewer' AND is_active=1").first().catch(() => ({c:0})),
+  ]);
+  return c.json({
+    modules: [
+      { key:'requisitions',        label:'需求管理',        count: reqCnt?.c||0, sub:`待审批 ${reqPending?.c||0} / 已批准 ${reqApproved?.c||0}` },
+      { key:'interviews_pipeline', label:'面试流水线',      count: tpCnt?.c||0,  sub:'已入库候选人' },
+      { key:'positions',           label:'岗位管理',         count: posCnt?.c||0, sub:`在招 ${posActive?.c||0} / 开放 ${posOpen?.c||0}` },
+      { key:'resumes',             label:'简历管理',         count: resumeCnt?.c||0, sub:`待处理 ${resumePending?.c||0} / 筛选中 ${resumeScreening?.c||0}` },
+      { key:'interviews',          label:'面试管理',         count: ivCnt?.c||0,  sub:`待面试 ${ivScheduled?.c||0} / 今日 ${ivToday?.c||0}` },
+      { key:'onboarding',          label:'入职管理',         count: onboardCnt?.c||0, sub:`待入职 ${onboardPending?.c||0} / 已入职 ${onboardHired?.c||0}` },
+      { key:'probation',           label:'试用期管理',       count: probCnt?.c||0, sub:`进行中 ${probActive?.c||0}` },
+      { key:'users',               label:'用户管理',         count: userCnt?.c||0, sub:`面试官 ${interviewerCnt?.c||0}` },
+    ],
+  });
 });
 
 app.get('/api/dashboard/ai-insights', authMiddleware, async (c) => {
@@ -1006,9 +1069,20 @@ function recordToFeishuFields(fields: Record<string, string>, record: any): Reco
 
 function getFirstValue(v: any): string | null {
   if (v === null || v === undefined) return null;
-  if (Array.isArray(v)) return v.length > 0 ? String(v[0]) : null;
+  if (Array.isArray(v)) {
+    // 飞书富文本格式：[{ text: "内容", type: "text" }, { text: "内容2", type: "text" }]
+    const texts = v.map((item: any) => {
+      if (typeof item === 'string') return item;
+      if (item?.text) return item.text;
+      if (item?.name) return item.name;
+      if (item?.content) return item.content;
+      return null;
+    }).filter(Boolean);
+    return texts.length > 0 ? texts.join('') : null;
+  }
   if (typeof v === 'object' && v.name) return v.name;
   if (typeof v === 'object' && v.text) return v.text;
+  if (typeof v === 'object' && v.content) return v.content;
   return String(v);
 }
 
@@ -1017,6 +1091,20 @@ function getFirstObj(v: any): any {
   if (Array.isArray(v)) return v.length > 0 ? v[0] : null;
   return v;
 }
+
+// ── 空值填充逻辑（通用，所有飞书同步共享） ──
+const defaultIfEmpty = (val: any, def: string): string => {
+  if (val === null || val === undefined || val === '' || val === '无' || val === 'None' || val === 'null') return def;
+  const s = String(val).trim();
+  if (!s || s === '无' || s === 'None' || s === 'null') return def;
+  return s;
+};
+
+const parseAge = (val: any): number => {
+  if (val === null || val === undefined || val === '' || val === '无' || val === 'None' || val === 'null') return 20;
+  const n = parseInt(String(val).replace(/[^\d]/g, ''));
+  return isNaN(n) ? 20 : n;
+};
 
 // 从飞书人才库记录转成前端可用的格式
 function parseTalentRecord(record: any): any {
@@ -1030,13 +1118,13 @@ function parseTalentRecord(record: any): any {
 
   return {
     id: record.record_id,
-    candidate_name: getFirstValue(f['姓名']) || '',
-    position_applied: getFirstValue(f['面试岗位']) || getFirstValue(f['招聘岗位']) || '',
+    candidate_name: getFirstValue(f['姓名']) || '未知',
+    position_applied: getFirstValue(f['面试岗位']) || getFirstValue(f['招聘岗位']) || '未知',
     mapped_position: getFirstValue(f['招聘岗位匹配']) || '',
-    gender: getFirstValue(f['性别']) || '',
-    city: getFirstValue(f['城市']) || '',
-    age: f['年龄'] || null,
-    education: getFirstValue(f['学历']) || '',
+    gender: defaultIfEmpty(getFirstValue(f['性别']), '未知'),
+    city: defaultIfEmpty(getFirstValue(f['城市']), '未知'),
+    age: parseAge(f['年龄']),
+    education: defaultIfEmpty(getFirstValue(f['学历']), '未知'),
     ai_evaluation: aiEvalStr,
     screening_result: getFirstValue(f['AI简历初筛结果']) || '',
     advantage: advantageStr,
@@ -1094,25 +1182,36 @@ function parseRequisitionRecord(record: any): any {
   const urgency = mapUrgency(f['紧急度']);
   const status = mapStatus(f['招聘状态']);
 
+  // 从说明字段提取薪资范围（同步时会把薪资范围写入说明）
+  const notes = getFirstValue(f['说明']) || '';
+  let salaryRange = '';
+  const salaryMatch = notes.match(/薪资范围:\s*(\S+)/);
+  if (salaryMatch) salaryRange = salaryMatch[1];
+  // 提取个性化需求
+  let personalizedReq = '';
+  const reqMatch = notes.match(/个性化需求:\s*(.+?)(?:\n|$)/);
+  if (reqMatch) personalizedReq = reqMatch[1];
+
   return {
     id: record.record_id,
-    title: getFirstValue(f['招聘岗位']) || '(未命名岗位)',
-    department: getFirstValue(f['二级部门']) || '',
-    department_3rd: getFirstValue(f['三级部门']) || '',
-    city: getFirstValue(f['招聘城市']) || '',
-    headcount: typeof headcount === 'number' ? headcount : parseInt(String(headcount)) || 1,
+    title: defaultIfEmpty(getFirstValue(f['招聘岗位']), '(未命名岗位)'),
+    department: defaultIfEmpty(getFirstValue(f['二级部门']), '未知'),
+    department_3rd: defaultIfEmpty(getFirstValue(f['三级部门']), '未知'),
+    city: defaultIfEmpty(getFirstValue(f['招聘城市']), '未知'),
+    headcount: typeof headcount === 'number' ? headcount : (parseInt(String(headcount)) || 1),
     urgency,
     status,
-    reason: getFirstValue(f['招聘理由']) || '',
-    notes: getFirstValue(f['说明']) || '',
-    description: getFirstValue(f['招聘JD']) || '',
-    requirements: getFirstValue(f['岗位职责与任职要求']) || '',
-    capability_requirements: getFirstValue(f['岗位能力提取']) || '',
-    capability_dimensions: getFirstValue(f['岗位能力维度要求']) || '',
-    city_tier: getFirstValue(f['城市等级']) || '',
-    in_budget: getFirstValue(f['是否在编制内']) || '',
-    responsible_person: getUserName(f['责任人']) || getFirstValue(f['招聘账号']) || '',
-    recruitment_account: getFirstValue(f['招聘账号']) || '',
+    reason: defaultIfEmpty(getFirstValue(f['招聘理由']), '无'),
+    notes,
+    description: defaultIfEmpty(getFirstValue(f['招聘JD']), '无'),
+    requirements: defaultIfEmpty(getFirstValue(f['岗位职责与任职要求']), '无'),
+    capability_requirements: defaultIfEmpty(getFirstValue(f['岗位能力提取']), '无'),
+    capability_dimensions: defaultIfEmpty(getFirstValue(f['岗位能力维度要求']), '无'),
+    personalized_requirements: defaultIfEmpty(personalizedReq, '无'),
+    city_tier: defaultIfEmpty(getFirstValue(f['城市等级']), '未知'),
+    in_budget: defaultIfEmpty(getFirstValue(f['是否在编制内']), '未知'),
+    responsible_person: getUserName(f['责任人']) || defaultIfEmpty(getFirstValue(f['招聘账号']), '待分配'),
+    recruitment_account: defaultIfEmpty(getFirstValue(f['招聘账号']), '无'),
     hr_interviewer: getUserName(f['HR二面']),
     biz_interviewer: getUserName(f['业务一面']),
     final_interviewer: getUserName(f['终面']),
@@ -1121,7 +1220,9 @@ function parseRequisitionRecord(record: any): any {
     start_date: f['开始招聘'] || null,
     end_date: f['结束招聘'] || null,
     employment_type: 'full_time',
-    salary_range: '',
+    salary_range: defaultIfEmpty(salaryRange, '未知'),
+    budget: null,
+    expected_date: null,
     feishu_record_id: record.record_id,
   };
 }
@@ -1172,7 +1273,12 @@ function extractFeishuUsers(fieldValue: any): Array<{ open_id: string; name: str
 function mapUrgency(v: any): string {
   if (typeof v === 'string') return v;
   if (typeof v === 'object' && v) return v.text || v.name || String(v);
-  return '普通';
+  if (typeof v === 'number') {
+    // 数字紧急度：1=低 2=中 3=高 4=紧急
+    const map: Record<number, string> = { 1: '低', 2: '中', 3: '高', 4: '紧急' };
+    return map[v] || '中';
+  }
+  return '中';
 }
 
 function mapStatus(v: any): string {
@@ -1394,11 +1500,11 @@ app.post('/api/positions/sync-from-feishu', authMiddleware, async (c) => {
             updated_at = ?
            WHERE id = ?`
         ).bind(
-          parsed.department || '', parsed.department_3rd || '', parsed.city || '',
-          parsed.headcount || 1, parsed.urgency || 'normal', parsed.status || 'open',
-          parsed.description || '', parsed.requirements || '',
-          parsed.responsible_person || '', parsed.salary_range || '',
-          parsed.primary_interviewer || '杜雁玲', parsed.secondary_interviewer || '何雨菱',
+          parsed.department, parsed.department_3rd, parsed.city,
+          parsed.headcount, parsed.urgency, parsed.status,
+          parsed.description, parsed.requirements,
+          parsed.responsible_person, parsed.salary_range,
+          parsed.primary_interviewer, parsed.secondary_interviewer,
           now(), existing.id
         ).run();
         updated++;
@@ -1413,11 +1519,11 @@ app.post('/api/positions/sync-from-feishu', authMiddleware, async (c) => {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).bind(
           id, title,
-          parsed.department || '', parsed.department_3rd || '', parsed.city || '',
-          parsed.headcount || 1, parsed.urgency || 'normal', parsed.status || 'open',
-          parsed.description || '', parsed.requirements || '',
-          parsed.responsible_person || '', parsed.salary_range || '',
-          parsed.primary_interviewer || '杜雁玲', parsed.secondary_interviewer || '何雨菱',
+          parsed.department, parsed.department_3rd, parsed.city,
+          parsed.headcount, parsed.urgency, parsed.status,
+          parsed.description, parsed.requirements,
+          parsed.responsible_person, parsed.salary_range,
+          parsed.primary_interviewer, parsed.secondary_interviewer,
           now(), now()
         ).run();
         created++;
@@ -1437,6 +1543,94 @@ app.post('/api/positions/sync-from-feishu', authMiddleware, async (c) => {
   }
 });
 
+/**
+ * 从飞书年度招聘需求表同步需求到飞书招聘任务表
+ * POST /api/requisitions/sync-from-annual
+ * 
+ * 年度招聘需求表 (tblnT0AHtiLsvMeB):
+ *   招聘岗位、事业部（二级）、所属部门（三级）、新增HC、薪资范围、
+ *   岗位职责和任职要求、个性化需求、岗位能力维度匹配、岗位进度
+ * 
+ * 同步到招聘任务表 (tblEiMBFXcvSspQd) 供前端需求管理页直读
+ */
+app.post('/api/requisitions/sync-from-annual', authMiddleware, async (c) => {
+  try {
+    const srcTableId = c.env.FEISHU_POSITION_TABLE_ID || FEISHU_CONFIG.positionTableId; // = tblnT0AHtiLsvMeB
+    const dstTableId = getBitableTableId(c.env, 'requisition'); // = tblEiMBFXcvSspQd
+    const records = await bitableListRecords(c.env, srcTableId);
+    const existingRecords = await bitableListRecords(c.env, dstTableId);
+
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const rec of records) {
+      const f = rec.fields || {};
+      const title = getFirstValue(f['招聘岗位']) || '(未命名岗位)';
+
+      if (title === '(未命名岗位)') {
+        skipped++;
+        continue;
+      }
+
+      // 在目标表中按源 record_id 查找已有记录（说明字段中标记了 [年度需求:xxx]）
+      const sourceTag = `[年度需求:${rec.record_id}]`;
+      const existing = existingRecords.find((r: any) => {
+        const note = getFirstValue(r.fields?.['说明']) || '';
+        return note.includes(sourceTag);
+      });
+
+      // 解析年度需求数据 → 映射到招聘任务表字段
+      const dept2 = f['事业部（二级）'];
+      const department = defaultIfEmpty(
+        Array.isArray(dept2) ? (dept2[0] || '') : (String(dept2 || '')),
+        '未知'
+      );
+      const department_3rd = defaultIfEmpty(getFirstValue(f['所属部门（三级）']), '未知');
+      const headcount = f['新增HC'] || 1;
+      const salaryRange = defaultIfEmpty(getFirstValue(f['薪资范围']), '未知');
+      const requirements = defaultIfEmpty(getFirstValue(f['岗位职责和任职要求']), '无');
+      const personalizedReq = defaultIfEmpty(getFirstValue(f['个性化需求']), '');
+
+      // 组装说明字段：包含源标记 + 个性化需求 + 薪资范围
+      const notesParts: string[] = [sourceTag];
+      if (personalizedReq) notesParts.push('个性化需求: ' + personalizedReq);
+      if (salaryRange) notesParts.push('薪资范围: ' + salaryRange);
+
+      // 组装招聘任务表字段（只写可写字段，跳过 Lookup/Formula/Rating 等只读类型）
+      const fields: Record<string, any> = {
+        '招聘岗位': title,
+        '二级部门': department,
+        '三级部门': department_3rd,
+        '招聘人数': typeof headcount === 'number' ? headcount : (parseInt(String(headcount)) || 1),
+        '招聘状态': '招聘中',
+        '说明': notesParts.join('\n'),
+        '招聘JD': requirements,
+        '招聘城市': '',
+      };
+
+      if (existing) {
+        await bitableUpdateRecord(c.env, dstTableId, existing.record_id, fields);
+        updated++;
+      } else {
+        await bitableCreateRecord(c.env, dstTableId, fields);
+        created++;
+      }
+    }
+
+    return c.json({
+      ok: true,
+      message: `年度需求同步完成：新增 ${created} 条，更新 ${updated} 条，跳过 ${skipped} 条`,
+      created,
+      updated,
+      skipped,
+    });
+  } catch (e: any) {
+    console.error(`[AnnualReqSync] 失败: ${e.message}`);
+    return c.json({ detail: '同步失败: ' + e.message }, 500);
+  }
+});
+
 registerCrud('positions', 'positions', { title: 'like', status: 'eq', department: 'like' });
 // interviews → 保留 D1（面试记录暂不迁移）
 registerCrud('interviews', 'interviews', { position_id: 'eq', status: 'eq' });
@@ -1447,6 +1641,81 @@ registerCrud('workflows', 'workflows', { status: 'eq' });
 registerCrud('workflow-nodes', 'workflow_nodes', { workflow_id: 'eq' });
 registerCrud('workflow-edges', 'workflow_edges', { workflow_id: 'eq' });
 registerCrud('workflow-executions', 'workflow_executions', { workflow_id: 'eq', status: 'eq' });
+
+// ==================== 面试管理候选人流水线 API ====================
+// 从已入库（status='approved'）的简历初筛记录中获取候选人，关联面试数据
+app.get('/api/interviews/pipeline-candidates', authMiddleware, async (c) => {
+  try {
+    const search = c.req.query('search') || '';
+    const filterStatus = c.req.query('status') || '';
+
+    // 查询已入库的初筛记录
+    let sql = "SELECT * FROM resume_screening_queue WHERE status = 'approved'";
+    const params: any[] = [];
+
+    if (search) {
+      sql += " AND candidate_name LIKE ?";
+      params.push(`%${search}%`);
+    }
+
+    sql += " ORDER BY updated_at DESC";
+
+    const { results: screeningRows } = await c.env.DB.prepare(sql).bind(...params).all();
+
+    // 查询所有面试记录，在代码层做关联（因为 resume_id 关联方式复杂）
+    const { results: interviewRows } = await c.env.DB.prepare(
+      "SELECT * FROM interviews ORDER BY created_at DESC"
+    ).all();
+
+    // 建立面试索引（按 resume_id + candidate_name + comments 多维关联）
+    const interviewMap = new Map<string, any>();
+    for (const iv of interviewRows || []) {
+      const keys = [iv.resume_id, iv.comments, iv.interviewer].filter(Boolean);
+      for (const k of keys) interviewMap.set(k, iv);
+    }
+
+    // 合并返回
+    const result = (screeningRows || []).map((row: any) => {
+      const matchedIv = interviewMap.get(row.resume_id)
+        || interviewMap.get(row.id)
+        || interviewMap.get(row.candidate_name)
+        || (interviewRows || []).find((iv: any) =>
+            iv.comments === row.candidate_name || iv.resume_id === row.resume_id);
+
+      return {
+        id: row.id,
+        candidate_name: row.candidate_name || '未知',
+        position_applied: row.position_applied || '',
+        mapped_position: row.mapped_position || '',
+        standard_position: row.mapped_position || row.position_applied || '',
+        education: row.education || '',
+        city: row.city || '',
+        status: 'approved',
+        feishu_record_id: row.resume_id || row.id || '',
+        resume_id: row.resume_id || '',
+        create_time: row.created_at || null,
+        biz_owner: '',
+        // 关联的面试信息
+        interview_id: matchedIv?.id || null,
+        interview_status: matchedIv?.status || '',
+        interview_time: matchedIv?.interview_time || '',
+        interview_location: matchedIv?.interview_location || '',
+        result: matchedIv?.result || '',
+        result2: matchedIv?.result2 || '',
+        evaluation: matchedIv?.evaluation || '',
+        evaluation2: matchedIv?.evaluation2 || '',
+        interviewer: matchedIv?.interviewer || '',
+        primary_interviewer: matchedIv?.primary_interviewer || '',
+        secondary_interviewer: matchedIv?.secondary_interviewer || '',
+      };
+    });
+
+    return c.json(result);
+  } catch (e: any) {
+    console.error(`[PipelineCandidates] 错误: ${e.message}`);
+    return c.json({ detail: '获取面试流水线数据失败: ' + e.message }, 500);
+  }
+});
 
 // ==================== 飞书多维表格 CRUD（替代 D1 CRUD） ====================
 
@@ -1522,155 +1791,6 @@ app.delete('/api/requisitions/:id', authMiddleware, async (c) => {
     return c.json({ detail: 'Deleted' });
   } catch (e: any) {
     return c.json({ detail: '删除失败: ' + e.message }, 500);
-  }
-});
-
-// ---- 人才库：直读飞书人才库表 ----
-app.get('/api/talent-pool', authMiddleware, async (c) => {
-  try {
-    const tableId = getBitableTableId(c.env, 'talent');
-    const records = await bitableListRecords(c.env, tableId);
-    let items = records.map(parseTalentRecord);
-
-    const nameFilter = c.req.query('candidate_name');
-    const statusFilter = c.req.query('status');
-    const responsiblePerson = c.req.query('responsible_person');
-    let filtered = items;
-
-    // 负责人筛选：通过 position_mappings 表匹配 mapped_position → responsible_person
-    if (responsiblePerson) {
-      const mapRows = await c.env.DB.prepare(
-        'SELECT mapped_name FROM position_mappings WHERE responsible_person = ?'
-      ).bind(responsiblePerson).all();
-      const personPositions = new Set((mapRows.results || []).map((r: any) => r.mapped_name.trim().toLowerCase()));
-      // 也查 positions 表
-      const posRows = await c.env.DB.prepare(
-        'SELECT title FROM positions WHERE responsible_person = ?'
-      ).bind(responsiblePerson).all();
-      for (const r of (posRows.results || [])) personPositions.add((r as any).title.trim().toLowerCase());
-      filtered = filtered.filter((i: any) => {
-        const pos = (i.mapped_position || i.position_applied || '').trim().toLowerCase();
-        return personPositions.has(pos);
-      });
-    }
-
-    if (statusFilter) {
-      filtered = filtered.filter(i => i.status === statusFilter);
-    } else {
-      // 默认不显示待初筛和已淘汰的，人才库只展示已入库的
-      filtered = filtered.filter(i => i.status !== 'pending_screening' && i.status !== 'rejected');
-    }
-    if (nameFilter) filtered = filtered.filter(i => i.candidate_name?.includes(nameFilter));
-
-    return c.json(filtered);
-  } catch (e: any) {
-    console.error(`[Bitable] 人才库列表失败: ${e.message}`);
-    return c.json({ detail: '读取飞书数据失败: ' + e.message }, 500);
-  }
-});
-
-app.get('/api/talent-pool/:id', authMiddleware, async (c) => {
-  try {
-    const tableId = getBitableTableId(c.env, 'talent');
-    const record = await bitableGetRecord(c.env, tableId, c.req.param('id'));
-    if (!record) return c.json({ detail: 'Not found' }, 404);
-    return c.json(parseTalentRecord(record));
-  } catch (e: any) {
-    return c.json({ detail: e.message }, 500);
-  }
-});
-
-app.post('/api/talent-pool', authMiddleware, async (c) => {
-  try {
-    const body = await c.req.json();
-    const tableId = getBitableTableId(c.env, 'talent');
-    const fields = feishuFieldsToRecord(FEISHU_TALENT_FIELDS, body);
-    const recordId = await bitableCreateRecord(c.env, tableId, fields);
-    if (!recordId) return c.json({ detail: 'Create failed' }, 500);
-    const record = await bitableGetRecord(c.env, tableId, recordId);
-    return c.json(parseTalentRecord(record));
-  } catch (e: any) {
-    return c.json({ detail: '创建失败: ' + e.message }, 500);
-  }
-});
-
-app.put('/api/talent-pool/:id', authMiddleware, async (c) => {
-  try {
-    const body = await c.req.json();
-    const tableId = getBitableTableId(c.env, 'talent');
-    const fields = feishuFieldsToRecord(FEISHU_TALENT_FIELDS, body);
-    await bitableUpdateRecord(c.env, tableId, c.req.param('id'), fields);
-    const record = await bitableGetRecord(c.env, tableId, c.req.param('id'));
-    return c.json(parseTalentRecord(record));
-  } catch (e: any) {
-    return c.json({ detail: '更新失败: ' + e.message }, 500);
-  }
-});
-
-app.delete('/api/talent-pool/:id', authMiddleware, async (c) => {
-  try {
-    const tableId = getBitableTableId(c.env, 'talent');
-    await bitableDeleteRecord(c.env, tableId, c.req.param('id'));
-    return c.json({ detail: 'Deleted' });
-  } catch (e: any) {
-    return c.json({ detail: '删除失败: ' + e.message }, 500);
-  }
-});
-
-app.post('/api/talent-pool/:id/notify-interview', authMiddleware, async (c) => {
-  try {
-    const id = c.req.param('id');
-    const body = await c.req.json();
-    const name = body?.name || '候选人';
-    const position = body?.position || '';
-
-    // 查飞书招聘任务表，找到匹配岗位的面试官
-    const requisitionTableId = getBitableTableId(c.env, 'requisition');
-    const reqs = await bitableListRecords(c.env, requisitionTableId);
-    const matched = reqs.find(r => {
-      const f = r.fields || {};
-      const posName = f['招聘岗位'] ? (Array.isArray(f['招聘岗位']) ? String(f['招聘岗位'][0] || '') : String(f['招聘岗位'])) : '';
-      return position && posName.includes(position);
-    });
-
-    const interviewers: string[] = [];
-    if (matched) {
-      const f = matched.fields || {};
-      const hrNames = getUserName(f['HR二面']);
-      const bizNames = getUserName(f['业务一面']);
-      if (hrNames) interviewers.push(hrNames);
-      if (bizNames) interviewers.push(bizNames);
-    }
-
-    // 用当前用户的 feishu_token 以用户身份发群消息，不是用 bot 身份
-    const currentUser = c.get('user');
-    const userToken = currentUser?.feishu_token;
-    const token = userToken || await getFeishuToken(c.env);
-    const chatId = FEISHU_CONFIG.recruitmentGroupChatId;
-    if (chatId) {
-      const msg = {
-        msg_type: 'interactive',
-        content: JSON.stringify({
-          config: { wide_screen_mode: true },
-          header: { title: { tag: 'plain_text', content: `🎯 面试安排提醒` }, template: 'blue' },
-          elements: [
-            { tag: 'div', text: { tag: 'lark_md', content: `**候选人：** ${name}\n**面试岗位：** ${position || '未指定'}` } },
-            { tag: 'hr' },
-            { tag: 'div', text: { tag: 'lark_md', content: `请相关面试官尽快安排面试。` } },
-            { tag: 'note', elements: [{ tag: 'plain_text', content: `来自 AI 智能面试系统` }] }
-          ]
-        })
-      };
-      await fetch(`https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ receive_id: chatId, ...msg }),
-      });
-    }
-
-    return c.json({ ok: true, detail: `已通知面试官安排 ${name} 的面试` });
-  } catch (e: any) {
-    return c.json({ detail: '通知失败: ' + e.message }, 500);
   }
 });
 
@@ -1879,7 +1999,7 @@ app.post('/api/interviews/create-from-talent', authMiddleware, async (c) => {
 
           cardElements.push(
             { tag: 'div', text: { tag: 'lark_md', content: `${operatorName} 为你安排了面试，请及时查看候选人简历，面试结束后在系统内填写评价。` } },
-            { tag: 'action', actions: [{ tag: 'button', text: { tag: 'plain_text', content: '🔍 查看候选人' }, type: 'primary', url: `https://ai-interview-22u.pages.dev/talent-pool` }] },
+            { tag: 'action', actions: [{ tag: 'button', text: { tag: 'plain_text', content: '🔍 查看候选人' }, type: 'primary', url: `https://ai-interview-22u.pages.dev/interviews` }] },
             { tag: 'note', elements: [{ tag: 'plain_text', content: `${operatorName} | AI 智能面试系统` }] }
           );
 
@@ -1975,7 +2095,7 @@ app.post('/api/resumes', authMiddleware, async (c) => {
       return c.json({ detail: '保存文件失败: ' + e.message }, 500);
     }
 
-    // 3. AI 解析简历（两阶段：先转文本 → 再提取结构化信息）
+    // 3. AI 解析简历（优先使用前端用 pdfjs 提取好的纯文本，准确率高得多）
     let parsedName = fileNameWithoutExt;
     let parsedGender = '';
     let parsedAge: number | null = null;
@@ -1990,10 +2110,17 @@ app.post('/api/resumes', authMiddleware, async (c) => {
     let parsedWorkYears: number | null = null;
     let parsedExperience: string = '';
     try {
-      // 第一阶段：把 base64 PDF 转为结构化文本（markdown）
-      const extractionPrompt = `你是一个PDF简历文本提取助手。下面是一份PDF简历的base64编码数据。请仔细阅读内容，将其转换为结构化的Markdown文本。保留所有可读的信息：姓名、联系方式、工作经历、教育背景、技能、项目经历等。如果内容中包含乱码或无法识别的字符，尽最大努力推断正确内容。直接输出Markdown文本，不要添加任何额外说明。`;
-      const extractedText = await callAI(c.env, extractionPrompt,
-        `以下是一份PDF简历的base64编码数据，请提取其中所有可读文本并转为Markdown格式（保留所有信息）：\n\n${fileBase64.substring(0, 32000)}${fileBase64.length > 32000 ? '\n\n[内容截断]' : ''}`, 'deepseek-chat');
+      // 优先取前端 pdfjs 提取的纯文本（质量最好，无 AI 幻觉）
+      let pdfText = formData.get('pdf_text')?.toString().trim() || '';
+      let extractedText = pdfText || '';
+
+      // 前端没传文本时，兜底用 AI 从 base64 中提取（准确率较低，但有胜于无）
+      if (!extractedText || extractedText.length < 20) {
+        console.log('[Upload] 前端未传 pdf_text，走 AI base64 提取兜底');
+        const extractionPrompt = `你是一个PDF简历文本提取助手。下面是一份PDF简历的base64编码数据。请仔细阅读内容，将其转换为结构化的Markdown文本。保留所有可读的信息：姓名、联系方式、工作经历、教育背景、技能、项目经历等。如果内容中包含乱码或无法识别的字符，尽最大努力推断正确内容。直接输出Markdown文本，不要添加任何额外说明。`;
+        extractedText = await callAI(c.env, extractionPrompt,
+          `以下是一份PDF简历的base64编码数据，请提取其中所有可读文本并转为Markdown格式（保留所有信息）：\n\n${fileBase64.substring(0, 32000)}${fileBase64.length > 32000 ? '\n\n[内容截断]' : ''}`, 'deepseek-chat');
+      }
 
       // 将提取的文本存入 `raw_text`
       if (extractedText && extractedText.length > 20) {
@@ -2003,7 +2130,7 @@ app.post('/api/resumes', authMiddleware, async (c) => {
         } catch {}
       }
 
-      // 第二阶段：用提取的文本做深度解析（优先读取数据库中的自定义 prompt）
+      // 第二阶段：用纯文本做深度结构化解析（质量大幅提升）
       const customPrompt = await getCustomPrompt(c.env, 'parse_resume_pdf');
       let systemPrompt: string, userPrompt: string;
       if (customPrompt) {
@@ -2015,7 +2142,7 @@ app.post('/api/resumes', authMiddleware, async (c) => {
         systemPrompt = sp;
         userPrompt = up;
       } else {
-        // 增强版默认配置
+        // 增强版默认配置 —— 中文优化，字段更全面
         systemPrompt = `你是一个专业的简历解析助手。请从简历文本中提取以下所有信息，并用JSON格式返回（不要加markdown代码块）。尽可能提取每个字段，找不到的字段设为null或空字符串。
 
 {
@@ -2037,7 +2164,7 @@ app.post('/api/resumes', authMiddleware, async (c) => {
   "risk": "候选人潜在风险点（如跳槽频繁、技能短板等，200字以内）",
   "evaluation": "综合评估（100字以内）"
 }`;
-        userPrompt = `以下是一份简历的文本内容，请从中提取所有字段信息：\n\n${extractedText || '（AI未能提取到文本，以下为原始base64数据）\n' + fileBase64.substring(0, 16000)}`;
+        userPrompt = `以下是一份简历的纯文本内容，请从中提取所有字段信息：\n\n${extractedText || '（AI未能提取到文本，以下为原始base64数据）\n' + fileBase64.substring(0, 16000)}`;
       }
       const aiResp = await callAI(c.env, systemPrompt, userPrompt, 'deepseek-chat');
       if (aiResp) {
@@ -2503,6 +2630,156 @@ app.delete('/api/resumes/:id', authMiddleware, async (c) => {
     return c.json({ detail: 'Deleted' });
   } catch (e: any) {
     return c.json({ detail: '删除失败: ' + e.message }, 500);
+  }
+});
+
+// ---- 飞书人才库导入：用机器人 token 抓取所有数据到本地 D1 ----
+app.post('/api/resumes/import-from-feishu', authMiddleware, async (c) => {
+  try {
+    const tableId = getBitableTableId(c.env, 'talent');
+    const records = await bitableListRecords(c.env, tableId);
+    let imported = 0, skipped = 0, failed = 0, pdfCached = 0, pdfFailed = 0;
+    const errors: string[] = [];
+
+    // 确保 feishu_sync 表存在
+    try { await c.env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS feishu_sync (record_id TEXT PRIMARY KEY, candidate_name TEXT, position_applied TEXT, created_at TEXT DEFAULT (datetime('now')))"
+    ).run(); } catch {}
+
+    for (const rec of records) {
+      const rid = rec.record_id;
+      const f = rec.fields || {};
+      const candidateName = getFirstValue(f['姓名']) || '';
+
+      if (!candidateName || !rid) { skipped++; continue; }
+
+      // 检查是否已导入
+      const existing = await c.env.DB.prepare('SELECT record_id FROM feishu_sync WHERE record_id = ?').bind(rid).first().catch(() => null);
+      if (existing) { skipped++; continue; }
+
+      try {
+        // 1. 导入到 resumes 表（本地持久化）—— 从飞书字段原样取值，不浪费 token
+        const resumeId = rid;
+        const positionApplied = defaultIfEmpty(getFirstValue(f['面试岗位']) || getFirstValue(f['招聘岗位']), '未知');
+        const gender = defaultIfEmpty(getFirstValue(f['性别']), '未知');
+        const age = f['年龄'] ? String(f['年龄']) : '';
+        const education = defaultIfEmpty(getFirstValue(f['学历']), '未知');
+        const city = defaultIfEmpty(getFirstValue(f['城市']), '未知');
+        const aiEval = getFirstValue(f['AI简历评估']) || '';
+        const hrResult = getFirstValue(f['HR复核结果']) || '';
+        const advantage = getFirstValue(f['优势分析']) || '';
+        const risk = getFirstValue(f['风险点']) || '';
+        const screeningResult = defaultIfEmpty(getFirstValue(f['AI简历初筛结果']), '待初筛');
+        const mappedPosition = defaultIfEmpty(getFirstValue(f['招聘岗位匹配']), '无');
+        const bizReview = defaultIfEmpty(getFirstValue(f['业务复核结果']), '待复核');
+        const bizOwner = defaultIfEmpty(getFirstValue(f['业务负责人']), '待分配');
+        const interviewSuggestion = defaultIfEmpty(getFirstValue(f['一面建议']), '无');
+        const interviewQuestions = defaultIfEmpty(getFirstValue(f['面试问题建议']), '无');
+        const notes = getFirstValue(f['备注-手动']) || '';
+        const reserveType = defaultIfEmpty(getFirstValue(f['储备人才类型-手动']), '未知');
+        const capDimMatch = getFirstValue(f['岗位能力维度匹配']) || '';
+
+        // 组装 parsed_data（包含从飞书取来的所有字段，前端直接读）
+        const parsedData: Record<string, any> = {
+          gender, age, education, city,
+          position_applied: positionApplied,
+          mapped_position: mappedPosition,
+          screening_result: screeningResult,
+          advantage, risk,
+          capability_dimension_match: capDimMatch,
+          interview_suggestion: interviewSuggestion,
+          interview_questions: interviewQuestions,
+          notes, reserve_type: reserveType,
+          hr_review: hrResult,
+          biz_review: bizReview,
+          biz_owner: bizOwner,
+          hr_pass_date: f['HR初筛通过日期'] || null,
+          create_time: f['创建时间'] || null,
+          source_id: getFirstValue(f['SourceID']) || '',
+        };
+
+        const ts = now();
+        try {
+          await c.env.DB.prepare(
+            `INSERT OR REPLACE INTO resumes (id, candidate_name, email, status, ai_review, hr_review, raw_text, created_at, parsed_data, match_score, screening_result)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(
+            resumeId, candidateName,
+            getFirstValue(f['SourceID']) || '',
+            mapHrReviewToStatus(hrResult || ''),
+            aiEval, hrResult,
+            advantage + '\n' + risk,
+            ts,
+            JSON.stringify(parsedData),
+            extractScoreFromEval(aiEval),
+            screeningResult || 'pending'
+          ).run();
+        } catch (e: any) {
+          // resumes 表可能缺少某些列，静默忽略
+          console.error(`[FeishuImport] resume insert failed for ${candidateName}: ${e.message}`);
+        }
+
+        // 2. 标记已同步
+        await c.env.DB.prepare(
+          'INSERT OR REPLACE INTO feishu_sync (record_id, candidate_name, position_applied, created_at) VALUES (?, ?, ?, ?)'
+        ).bind(rid, candidateName, positionApplied, ts).run();
+
+        imported++;
+
+        // 3. 顺手下载 PDF 缓存：遍历所有字段找附件（静默，失败不影响主流程）
+        try {
+          let fileToken = '', tmpUrl = '';
+          for (const [fieldName, fieldValue] of Object.entries(f)) {
+            if (Array.isArray(fieldValue) && fieldValue.length > 0) {
+              const item = fieldValue[0];
+              if (item && typeof item === 'object' && item.file_token) {
+                fileToken = item.file_token;
+                tmpUrl = item.tmp_url || '';
+                break;
+              }
+              if (item && typeof item === 'object' && item.link && item.link.includes('/download/all/')) {
+                const linkMatch = item.link.match(/\/download\/all\/([^\/\?]+)/);
+                if (linkMatch) { fileToken = linkMatch[1]; tmpUrl = item.link; break; }
+              }
+            }
+          }
+          if (fileToken) {
+            const existingFile = await c.env.DB.prepare('SELECT id FROM resume_files WHERE id = ?').bind(rid).first().catch(() => null);
+            if (!existingFile) {
+              const resp = await downloadFeishuAttachment(c.env, fileToken, tmpUrl);
+              if (resp) {
+                const blob = await resp.clone().arrayBuffer();
+                const b64 = bufToB64(blob);
+                await c.env.DB.prepare(
+                  'INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+                ).bind(rid, 'import_' + fileToken, candidateName + '.pdf', blob.byteLength, b64, ts).run();
+                pdfCached++;
+              } else {
+                pdfFailed++;
+              }
+            }
+          }
+        } catch (e: any) {
+          pdfFailed++;
+          console.error(`[FeishuImport] PDF cache failed for ${candidateName}: ${e.message}`);
+        }
+      } catch (e: any) {
+        failed++;
+        errors.push(`${candidateName}: ${e.message?.substring(0, 80)}`);
+      }
+    }
+
+    return c.json({
+      total: records.length,
+      imported,
+      skipped,
+      failed,
+      pdf_cached: pdfCached,
+      pdf_failed: pdfFailed,
+      errors: errors.length > 0 ? errors : undefined,
+    });
+  } catch (e: any) {
+    return c.json({ detail: '飞书导入失败: ' + e.message }, 500);
   }
 });
 
@@ -3006,46 +3283,6 @@ app.post('/api/interviews/:id/start', authMiddleware, async (c) => {
   return c.json(transformRow(row));
 });
 
-// 从人才库一键开始面试 → 创建面试记录 + 通知面试官
-app.post('/api/interviews/start-from-talent-pool/:talentId', authMiddleware, async (c) => {
-  const talentId = c.req.param('talentId');
-  const talent = await c.env.DB.prepare('SELECT * FROM talent_pool WHERE id = ?').bind(talentId).first() as any;
-  if (!talent) return c.json({ detail: 'Talent not found' }, 404);
-
-  const candidateName = talent.candidate_name || '未知';
-  const posName = talent.position_applied || talent.current_title || '未知岗位';
-  const resumeId = talent.resume_id || null;
-  const city = talent.city || '';
-  const aiEval = talent.ai_evaluation || '';
-
-  // 创建面试记录
-  const interviewId = uuid();
-  await c.env.DB.prepare(
-    `INSERT INTO interviews (id, resume_id, interviewer, status, created_at)
-     VALUES (?, ?, ?, 'scheduled', ?)`
-  ).bind(interviewId, resumeId, candidateName, now()).run();
-
-  // 异步通知面试官
-  c.executionCtx.waitUntil((async () => {
-    try {
-      const token = await getFeishuToken(c.env);
-      const fakeRecord = {
-        candidate_name: candidateName,
-        mapped_position: posName,
-        position_applied: posName,
-        city: city,
-        ai_analysis: aiEval,
-      };
-      await notifyInterviewersForCandidate(c.env, token, fakeRecord);
-    } catch (e: any) {
-      console.error(`通知面试官失败: ${e.message}`);
-    }
-  })());
-
-  const row = await c.env.DB.prepare('SELECT * FROM interviews WHERE id = ?').bind(interviewId).first();
-  return c.json({ ...transformRow(row), talent_id: talentId });
-});
-
 app.post('/api/interviews/:id/cancel', authMiddleware, async (c) => {
   const id = c.req.param('id');
   const interview = await c.env.DB.prepare('SELECT * FROM interviews WHERE id = ?').bind(id).first() as any;
@@ -3053,33 +3290,7 @@ app.post('/api/interviews/:id/cancel', authMiddleware, async (c) => {
 
   await c.env.DB.prepare("UPDATE interviews SET status = 'cancelled' WHERE id = ?").bind(id).run();
 
-  // 若面试关联了人才库记录 → 删除人才库记录并同步飞书
-  const resumeId = interview.resume_id;
-  if (resumeId) {
-    const talent = await c.env.DB.prepare('SELECT * FROM talent_pool WHERE resume_id = ?').bind(resumeId).first() as any;
-    if (talent) {
-      const feishuRecordId = talent.feishu_record_id;
-      await c.env.DB.prepare('DELETE FROM talent_pool WHERE id = ?').bind(talent.id).run();
-
-      // 异步删除飞书多维表格记录
-      if (feishuRecordId) {
-        c.executionCtx.waitUntil((async () => {
-          try {
-            const token = await getFeishuToken(c.env);
-            await fetch(`https://open.feishu.cn/open-apis/bitable/v1/apps/${FEISHU_CONFIG.appToken}/tables/${FEISHU_CONFIG.talentTableId}/records/${feishuRecordId}`, {
-              method: 'DELETE',
-              headers: { 'Authorization': `Bearer ${token}` },
-            });
-            console.log(`[Cancel] 已同步删除飞书人才库记录: ${feishuRecordId}`);
-          } catch (e: any) {
-            console.error(`[Cancel] 同步删除飞书记录失败: ${e.message}`);
-          }
-        })());
-      }
-    }
-  }
-
-  return c.json({ detail: 'Interview cancelled, talent pool record removed' });
+  return c.json({ detail: '面试已取消' });
 });
 
 app.post('/api/interviews/:id/score', authMiddleware, async (c) => {
@@ -3206,68 +3417,6 @@ app.post('/api/interviews/:id/ai-analysis', authMiddleware, async (c) => {
   }
 });
 
-// AI recommend positions for a talent pool candidate
-app.post('/api/talent-pool/:id/ai-recommend', authMiddleware, async (c) => {
-  const id = c.req.param('id');
-  const talent = await c.env.DB.prepare('SELECT * FROM talent_pool WHERE id = ?').bind(id).first() as any;
-  if (!talent) return c.json({ detail: 'Talent not found' }, 404);
-  const positions = await c.env.DB.prepare("SELECT id, title, department, requirements, salary_range, status FROM positions WHERE status IN ('open','published') ORDER BY created_at DESC LIMIT 20").all();
-  const systemPrompt = `你是一名资深猎头 AI。根据候选人背景和现有在招岗位,推荐最合适的岗位并说明理由。只用中文回答。返回 JSON 数组,每项含 {"position_id": "岗位ID", "position_title": "岗位名称", "match_score": 0-100整数, "reason": "推荐理由"}。不要包含 markdown 代码块标记或额外说明。`;
-  const candidateInfo = { name: talent.candidate_name, current_title: talent.current_title, skills: talent.skills, experience_years: talent.experience_years, education: talent.education, expected_salary: talent.expected_salary, tags: talent.tags };
-  const userPrompt = `候选人信息:\n${JSON.stringify(candidateInfo, null, 2)}\n\n在招岗位列表:\n${JSON.stringify(positions.results.map((p: any) => ({ id: p.id, title: p.title, department: p.department, requirements: p.requirements, salary_range: p.salary_range })), null, 2)}\n\n请推荐最匹配的岗位(最多5个),按匹配度从高到低排序。`;
-  try {
-    const result = await callAI(c.env, systemPrompt, userPrompt, 'deepseek-v4-flash');
-    let recommendations: any[];
-    try { recommendations = extractJSON(result); if (!Array.isArray(recommendations)) recommendations = [recommendations]; } catch { recommendations = []; }
-    return c.json({ talent_id: id, recommendations });
-  } catch (err: any) {
-    return c.json({ detail: 'AI recommend failed', error: err.message }, 500);
-  }
-});
-
-// AI probation assessment from monthly reviews
-app.post('/api/probation/:id/ai-assessment', authMiddleware, async (c) => {
-  const id = c.req.param('id');
-  const record = await c.env.DB.prepare('SELECT * FROM probation_records WHERE id = ?').bind(id).first() as any;
-  if (!record) return c.json({ detail: 'Probation record not found' }, 404);
-  let reviews: any[] = [];
-  try { reviews = JSON.parse(record.monthly_reviews || '[]'); } catch {}
-  let position: any = null;
-  if (record.position_id) position = await c.env.DB.prepare('SELECT title, requirements FROM positions WHERE id = ?').bind(record.position_id).first() as any;
-  const systemPrompt = `你是一名资深 HR 顾问 AI。根据员工试用期月度评审记录,生成试用期综合评估报告。用中文回答,使用 Markdown 格式,包含:## 总体表现、## 优势、## 不足与改进、## 转正建议(明确给出建议转正/延长试用期/不予转正及理由)。`;
-  const userPrompt = `员工: ${record.employee_name}\n岗位: ${position?.title || '未知'}\n岗位要求: ${position?.requirements || '无'}\n试用期月数: ${record.probation_months || 3}\n\n月度评审记录:\n${reviews.length > 0 ? JSON.stringify(reviews, null, 2) : '暂无月度评审记录'}\n\n请生成试用期综合评估报告。`;
-  try {
-    const assessment = await callAI(c.env, systemPrompt, userPrompt, 'deepseek-v4-flash');
-    await c.env.DB.prepare('UPDATE probation_records SET final_assessment = ?, updated_at = ? WHERE id = ?')
-      .bind(assessment, now(), id).run();
-    const row = await c.env.DB.prepare('SELECT * FROM probation_records WHERE id = ?').bind(id).first();
-    return c.json(transformRow(row));
-  } catch (err: any) {
-    return c.json({ detail: 'AI assessment failed', error: err.message }, 500);
-  }
-});
-
-// AI generate/refine job description from a requisition
-app.post('/api/requisitions/:id/ai-jd', authMiddleware, async (c) => {
-  const id = c.req.param('id');
-  const req = await c.env.DB.prepare('SELECT * FROM job_requisitions WHERE id = ?').bind(id).first() as any;
-  if (!req) return c.json({ detail: 'Requisition not found' }, 404);
-  const systemPrompt = `你是一名资深招聘专家。根据招聘需求信息生成专业的职位描述和任职要求。只用中文回答。返回严格的 JSON: {"description": "详细职责描述", "requirements": "任职要求,多条用换行分隔"}。不要包含 markdown 代码块标记或额外说明。`;
-  const userPrompt = `职位名称: ${req.title}\n部门: ${req.department}\n招聘人数: ${req.headcount || 1}\n用工类型: ${req.employment_type || 'full_time'}\n薪资范围: ${req.salary_range || '面议'}\n紧急程度: ${req.urgency || 'medium'}\n现有描述: ${req.description || '无'}\n现有要求: ${req.requirements || '无'}\n\n请生成或完善该职位的描述和任职要求。`;
-  try {
-    const result = await callAI(c.env, systemPrompt, userPrompt, 'deepseek-v4-flash');
-    let parsed: any;
-    try { parsed = extractJSON(result); } catch { parsed = { description: result, requirements: '' }; }
-    await c.env.DB.prepare('UPDATE job_requisitions SET description = ?, requirements = ?, updated_at = ? WHERE id = ?')
-      .bind(parsed.description || '', parsed.requirements || '', now(), id).run();
-    const row = await c.env.DB.prepare('SELECT * FROM job_requisitions WHERE id = ?').bind(id).first();
-    return c.json(transformRow(row));
-  } catch (err: any) {
-    return c.json({ detail: 'AI generate failed', error: err.message }, 500);
-  }
-});
-
-
 // ==================== Requisition Actions ====================
 
 app.post('/api/requisitions/:id/approve', authMiddleware, async (c) => {
@@ -3283,15 +3432,6 @@ app.post('/api/requisitions/:id/reject', authMiddleware, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   await c.env.DB.prepare("UPDATE job_requisitions SET status = 'rejected', rejection_reason = ? WHERE id = ?").bind(body.reason || '', id).run();
   const row = await c.env.DB.prepare('SELECT * FROM job_requisitions WHERE id = ?').bind(id).first();
-  return c.json(transformRow(row));
-});
-
-// ==================== Talent Pool Actions ====================
-
-app.post('/api/talent-pool/:id/contact', authMiddleware, async (c) => {
-  const id = c.req.param('id');
-  await c.env.DB.prepare("UPDATE talent_pool SET status = 'contacted', last_contacted_at = ? WHERE id = ?").bind(now(), id).run();
-  const row = await c.env.DB.prepare('SELECT * FROM talent_pool WHERE id = ?').bind(id).first();
   return c.json(transformRow(row));
 });
 
@@ -3647,7 +3787,6 @@ app.post('/api/init/reset', authMiddleware, requireRole(['admin']), async (c) =>
     'probation_records',
     'onboarding_records',
     'background_checks',
-    'talent_pool',
     'interview_panels',
     'interviews',
     'department_reviews',
@@ -3704,12 +3843,12 @@ app.post('/api/position-mappings/sync-from-feishu', authMiddleware, async (c) =>
     const agg: Record<string, { responsible_person: string; interviewers: { name: string; role: string }[] }> = {};
     for (const rec of records) {
       const f = rec.fields || {};
-      const title = getFirstValue(f['招聘岗位']) || '';
-      if (!title) continue;
+      const title = defaultIfEmpty(getFirstValue(f['招聘岗位']), '(未命名岗位)');
+      if (!title || title === '(未命名岗位)') continue;
       if (!agg[title]) {
         agg[title] = { responsible_person: '', interviewers: [] };
       }
-      const person = getUserName(f['责任人']) || '';
+      const person = getUserName(f['责任人']) || '待分配';
       if (person && !agg[title].responsible_person) {
         agg[title].responsible_person = person;
       }
@@ -3959,7 +4098,7 @@ ${resumeText.substring(0, 6000)}`;
   return c.json(transformRow(row));
 });
 
-// Approve a screening record (入库 -> creates talent_pool entry)
+// Approve a screening record (入库到面试流水线)
 app.post('/api/resume-screening/:id/approve', authMiddleware, async (c) => {
   const user = c.get('user');
   const id = c.req.param('id');
@@ -3967,18 +4106,7 @@ app.post('/api/resume-screening/:id/approve', authMiddleware, async (c) => {
   if (!record) return c.json({ detail: 'Not found' }, 404);
   if (record.status !== 'pending') return c.json({ detail: 'Already processed' }, 400);
 
-  // Create talent_pool entry
-  const tpId = uuid();
-  await c.env.DB.prepare(
-    `INSERT INTO talent_pool (id, resume_id, candidate_name, email, phone, current_title, skills, experience_years, education, expected_salary, source, tags, status, notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-  ).bind(
-    tpId, record.resume_id || null, record.candidate_name, '', '', record.position_applied || '',
-    '[]', 0, record.education || '', '', '邮箱初筛',
-    JSON.stringify(['AI初筛']), 'available',
-    record.ai_analysis || '', now(), now()
-  ).run();
-
-  // Update screening record
+  // 更新筛选记录状态为 approved（已入库到面试流水线）
   await c.env.DB.prepare(
     'UPDATE resume_screening_queue SET status = ?, ai_result = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ?'
   ).bind('approved', 'shortlisted', user.id, now(), now(), id).run();
@@ -3991,7 +4119,7 @@ app.post('/api/resume-screening/:id/approve', authMiddleware, async (c) => {
       const talentTableId = c.env.FEISHU_TALENT_TABLE_ID || FEISHU_CONFIG.talentTableId;
       const posName = record.mapped_position || record.position_applied?.split('_')[0] || '未知岗位';
 
-      // 写飞书人才库多维表格
+      // 写飞书人才库多维表格（仍保留，作为投递数据存档）
       await createFeishuBitableRecord(token, appToken, talentTableId, {
         '姓名': record.candidate_name || '未知',
         '年龄': record.age || null,
@@ -4016,7 +4144,7 @@ app.post('/api/resume-screening/:id/approve', authMiddleware, async (c) => {
   })());
 
   const row = await c.env.DB.prepare('SELECT * FROM resume_screening_queue WHERE id = ?').bind(id).first();
-  return c.json({ ...transformRow(row), talent_pool_id: tpId });
+  return c.json(transformRow(row));
 });
 
 // Reject a screening record (淘汰)
@@ -4325,9 +4453,80 @@ async function getFeishuToken(env: Env): Promise<string> {
   return data.tenant_access_token;
 }
 
-/** 获取数据库中任意一个有效用户 access_token（用于发飞书消息等需要用户授权的操作） */
+/** 用 refresh_token 刷新 user_access_token（飞书 OAuth v2 刷新接口） */
+async function refreshUserFeishuToken(env: Env, userEmail: string): Promise<string | null> {
+  try {
+    const row = await env.DB.prepare(
+      "SELECT refresh_token FROM feishu_tokens WHERE user_email = ? AND refresh_token != '' LIMIT 1"
+    ).bind(userEmail).first() as any;
+    if (!row?.refresh_token) return null;
+
+    const appId = env.FEISHU_APP_ID || FEISHU_CONFIG.appId;
+    const appSecret = env.FEISHU_APP_SECRET || FEISHU_CONFIG.appSecret;
+
+    const resp = await fetch('https://open.feishu.cn/open-apis/authen/v2/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: row.refresh_token,
+        client_id: appId,
+        client_secret: appSecret,
+      }),
+    });
+    const data: any = await resp.json();
+    if (data.code !== 0) {
+      console.error(`[refreshUserFeishuToken] 刷新失败: code=${data.code}, msg=${data.msg}`);
+      return null;
+    }
+
+    const newAccessToken = data.access_token || data.data?.access_token || '';
+    const newRefreshToken = data.refresh_token || data.data?.refresh_token || '';
+    const expiresIn = data.expires_in || data.data?.expires_in || 7200;
+    const expiresAtUnix = Math.floor(Date.now() / 1000) + expiresIn;
+    const nowStr = now();
+
+    // 更新 feishu_tokens 表
+    await env.DB.prepare('DELETE FROM feishu_tokens WHERE user_email = ?').bind(userEmail).run();
+    await env.DB.prepare(`
+      INSERT INTO feishu_tokens (id, user_email, access_token, refresh_token, expires_at, open_id, name, created_at)
+      VALUES (?, ?, ?, ?, ?, (SELECT IFNULL(feishu_open_id,'') FROM users WHERE email = ?), (SELECT IFNULL(feishu_name,'') FROM users WHERE email = ?), ?)
+    `).bind(uuid(), userEmail, newAccessToken, newRefreshToken, expiresAtUnix, userEmail, userEmail, nowStr).run();
+
+    // 同步更新 users 表 feishu_token 字段
+    await env.DB.prepare('UPDATE users SET feishu_token = ?, updated_at = ? WHERE email = ?')
+      .bind(newAccessToken, nowStr, userEmail).run();
+
+    console.log(`[refreshUserFeishuToken] ✅ ${userEmail} token 刷新成功，${expiresIn}s 后过期`);
+    return newAccessToken;
+  } catch (e: any) {
+    console.error(`[refreshUserFeishuToken] 异常: ${e.message}`);
+    return null;
+  }
+}
+
+/** 获取数据库中任意一个有效用户 access_token（优先查 feishu_tokens 表，过期自动刷新） */
 async function getAnyUserFeishuToken(env: Env): Promise<string | null> {
   try {
+    // 1. 优先查 feishu_tokens 表，筛选有效期内且 access_token 非空
+    const nowUnix = Math.floor(Date.now() / 1000);
+    const validRow = await env.DB.prepare(
+      "SELECT user_email, access_token, expires_at FROM feishu_tokens WHERE access_token != '' AND expires_at > ? ORDER BY expires_at DESC LIMIT 1"
+    ).bind(nowUnix).first() as any;
+    if (validRow?.access_token) {
+      return validRow.access_token;
+    }
+
+    // 2. 有 feishu_tokens 记录但过期了，尝试用 refresh_token 刷新
+    const expiredRow = await env.DB.prepare(
+      "SELECT user_email FROM feishu_tokens WHERE refresh_token != '' ORDER BY expires_at DESC LIMIT 1"
+    ).first() as any;
+    if (expiredRow?.user_email) {
+      const refreshed = await refreshUserFeishuToken(env, expiredRow.user_email);
+      if (refreshed) return refreshed;
+    }
+
+    // 3. 兜底：查 users 表
     const row = await env.DB.prepare(
       "SELECT feishu_token FROM users WHERE feishu_token IS NOT NULL AND feishu_token != '' LIMIT 1"
     ).first() as any;
@@ -4335,7 +4534,7 @@ async function getAnyUserFeishuToken(env: Env): Promise<string | null> {
   } catch { return null; }
 }
 
-/** 带 fallback 的消息发送：优先用 user_access_token，失败则用 tenant_access_token */
+/** 带 fallback 的消息发送：优先用 user_access_token（过期自动刷新），失败则用 tenant_access_token */
 async function sendFeishuMessageWithFallback(
   env: Env,
   openId: string,
@@ -4344,49 +4543,75 @@ async function sendFeishuMessageWithFallback(
 ): Promise<void> {
   // 尝试顺序：
   // 1. 外部传入的 preferredToken（如当前登录用户的 feishu_token）
-  // 2. 数据库中任意用户的 feishu_token
+  // 2. 数据库中任意用户的 feishu_token（自动刷新过期 token）
   // 3. 最终 fallback：tenant_access_token
   
-  const tokensToTry: string[] = [];
-  if (preferredToken) tokensToTry.push(preferredToken);
-  const dbToken = await getAnyUserFeishuToken(env);
-  if (dbToken && !tokensToTry.includes(dbToken)) tokensToTry.push(dbToken);
-  
-  // 最后一手：tenant_access_token
   let lastError: Error | null = null;
-  
-  if (tokensToTry.length > 0) {
-    for (const token of tokensToTry) {
-      try {
-        const resp = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id', {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            receive_id: openId,
-            msg_type: 'interactive',
-            content: JSON.stringify(cardContent),
-          }),
-        });
-        const data: any = await resp.json();
-        if (data.code === 0) return; // 成功
-        if (data.code === 99991677) {
-          // token 过期，继续尝试下一个
-          lastError = new Error(`token 过期(${data.code}): ${JSON.stringify(data.msg || data)}`);
-          continue;
-        }
-        // 其他错误直接抛
+
+  // 如果有 preferredToken，直接尝试发送
+  if (preferredToken) {
+    try {
+      const resp = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${preferredToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          receive_id: openId,
+          msg_type: 'interactive',
+          content: JSON.stringify(cardContent),
+        }),
+      });
+      const data: any = await resp.json();
+      if (data.code === 0) return;
+
+      // token 过期 → 尝试刷新（根据 user 的 email 找 refresh_token）
+      if (data.code === 99991677 || data.code === 99991663) {
+        console.log(`[sendFeishuMessageWithFallback] preferredToken 过期，尝试自动刷新...`);
+        // 无法知道 preferredToken 对应的 email，跳过刷新直接 fallback
+      } else {
         throw new Error(`发送消息失败(${data.code}): ${JSON.stringify(data.msg || data)}`);
-      } catch (e: any) {
-        if (e.message.includes('99991677') || e.message.includes('token 过期')) {
-          lastError = e;
-          continue;
-        }
+      }
+    } catch (e: any) {
+      if (e.message.includes('99991677') || e.message.includes('99991663') || e.message.includes('token 过期')) {
+        lastError = e;
+      } else {
         throw e;
       }
     }
   }
-  
-  // 所有 user_access_token 都失败，尝试 tenant_access_token
+
+  // 2. 通过 getAnyUserFeishuToken（自动刷新过期 token）
+  const dbToken = await getAnyUserFeishuToken(env);
+  if (dbToken && dbToken !== preferredToken) {
+    try {
+      const resp = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${dbToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          receive_id: openId,
+          msg_type: 'interactive',
+          content: JSON.stringify(cardContent),
+        }),
+      });
+      const data: any = await resp.json();
+      if (data.code === 0) {
+        console.log(`[sendFeishuMessageWithFallback] ✅ 使用刷新后的 user_access_token 发送成功`);
+        return;
+      }
+      if (data.code === 99991677 || data.code === 99991663) {
+        lastError = new Error(`刷新后 token 仍过期(${data.code}): ${JSON.stringify(data.msg || data)}`);
+      } else {
+        throw new Error(`发送消息失败(${data.code}): ${JSON.stringify(data.msg || data)}`);
+      }
+    } catch (e: any) {
+      if (e.message.includes('99991677') || e.message.includes('99991663') || e.message.includes('token 过期')) {
+        lastError = e;
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  // 3. 所有 user_access_token 都失败，尝试 tenant_access_token
   try {
     const tenantToken = await getFeishuToken(env);
     await sendFeishuMessageToUser(tenantToken, openId, cardContent);
@@ -5019,11 +5244,10 @@ app.post('/api/feishu/event-callback', async (c) => {
 
         // 统计指令
         if (msgText.includes('统计') || msgText.includes('进度')) {
-          const total = await c.env.DB.prepare("SELECT COUNT(*) as c FROM talent_pool").first() as any;
           const pending = await c.env.DB.prepare("SELECT COUNT(*) as c FROM resume_screening_queue WHERE status='pending'").first() as any;
           const approved = await c.env.DB.prepare("SELECT COUNT(*) as c FROM resume_screening_queue WHERE status='approved'").first() as any;
           await replyText(
-            `📊 招聘统计\n人才库: ${total?.c || 0} 人\n待审核: ${pending?.c || 0} 人\n今日入库: ${approved?.c || 0} 人`
+            `📊 招聘统计\n已入库: ${approved?.c || 0} 人\n待审核: ${pending?.c || 0} 人`
           );
         }
 
@@ -5039,9 +5263,9 @@ app.post('/api/feishu/event-callback', async (c) => {
       } else if (chatType === 'p2p' && msgType === 'text') {
         const msgText = textContent.text || '';
         if (msgText.includes('统计') || msgText.includes('进度')) {
-          const total = await c.env.DB.prepare("SELECT COUNT(*) as c FROM talent_pool").first() as any;
+          const approved = await c.env.DB.prepare("SELECT COUNT(*) as c FROM resume_screening_queue WHERE status='approved'").first() as any;
           const pending = await c.env.DB.prepare("SELECT COUNT(*) as c FROM resume_screening_queue WHERE status='pending'").first() as any;
-          await replyText(`📊 招聘统计\n人才库: ${total?.c || 0} 人\n待审核: ${pending?.c || 0} 人`);
+          await replyText(`📊 招聘统计\n已入库: ${approved?.c || 0} 人\n待审核: ${pending?.c || 0} 人`);
         } else {
           await replyText(`🤖 你好！我是招聘助手。\n在群中 @我 可进行面试评价或查看统计数据。`);
         }
@@ -5076,10 +5300,9 @@ app.post('/api/feishu/event-callback', async (c) => {
             await reply(`📋 **待审核列表**\n${names}`);
             break;
           case 'stats_progress':
-            const total = await c.env.DB.prepare("SELECT COUNT(*) as c FROM talent_pool").first() as any;
             const pend = await c.env.DB.prepare("SELECT COUNT(*) as c FROM resume_screening_queue WHERE status='pending'").first() as any;
             const appr = await c.env.DB.prepare("SELECT COUNT(*) as c FROM resume_screening_queue WHERE status='approved'").first() as any;
-            await reply(`📊 **招聘进度**\n人才库: ${total?.c || 0} 人\n待审核: ${pend?.c || 0} 人\n已入库: ${appr?.c || 0} 人`);
+            await reply(`📊 **招聘进度**\n已入库: ${appr?.c || 0} 人\n待审核: ${pend?.c || 0} 人`);
             break;
           case 'help':
             await reply(`🤖 **招聘助手功能**\n• 评价[姓名] [能力][分数]\n• 统计查看数据\n• @我使用`);
@@ -5129,10 +5352,6 @@ app.post('/api/cron/daily-report', async (c) => {
       "SELECT COUNT(*) as c FROM resume_screening_queue WHERE status = 'pending'"
     ).first() as any;
 
-    const talentCount = await c.env.DB.prepare(
-      "SELECT COUNT(*) as c FROM talent_pool"
-    ).first() as any;
-
     // 推送到招聘群
     const chatId = FEISHU_CONFIG.recruitmentGroupChatId;
     if (chatId) {
@@ -5158,7 +5377,7 @@ app.post('/api/cron/daily-report', async (c) => {
                 '',
                 `**📦 累计数据**`,
                 `待审核：**${pendingCount?.c || 0}** 人`,
-                `人才库总数：**${talentCount?.c || 0}** 人`,
+                `已入库总计：**${approvedCount?.c || 0}** 人`,
               ].join('\n')
             }
           },
@@ -5180,7 +5399,6 @@ app.post('/api/cron/daily-report', async (c) => {
         approved: approvedCount?.c || 0,
         rejected: rejectedCount?.c || 0,
         pending: pendingCount?.c || 0,
-        talentPool: talentCount?.c || 0,
       }
     });
   } catch (err: any) {
@@ -5349,6 +5567,53 @@ async function sendFeishuMessageToUser(token: string, openId: string, cardConten
  * 3. 从 resume_files 表取 PDF base64 → 用 AI 提取文本
  * 4. 兜底：仅返回基本信息汇总
  */
+/** 从飞书记录中找到附件并下载 PDF → AI 提取文本，存入 D1 */
+async function downloadAndExtractFromFeishu(env: Env, resumeId: string, candidateName: string, fields: Record<string, any>): Promise<string | null> {
+  // 遍历所有字段看有无 file_token
+  let fileToken = '', tmpUrl = '';
+  for (const [fieldName, fieldValue] of Object.entries(fields)) {
+    if (Array.isArray(fieldValue) && fieldValue.length > 0) {
+      const item = fieldValue[0];
+      if (item && typeof item === 'object' && item.file_token) {
+        fileToken = item.file_token;
+        tmpUrl = item.tmp_url || '';
+        break;
+      }
+      if (item && typeof item === 'object' && item.link && item.link.includes('/download/all/')) {
+        const linkMatch = item.link.match(/\/download\/all\/([^\/\?]+)/);
+        if (linkMatch) { fileToken = linkMatch[1]; tmpUrl = item.link; break; }
+      }
+    }
+  }
+  if (!fileToken) return null;
+
+  try {
+    const resp = await downloadFeishuAttachment(env, fileToken, tmpUrl);
+    if (!resp) return null;
+    const blob = await resp.clone().arrayBuffer();
+    const b64 = bufToB64(blob);
+    // 存到 resume_files
+    try {
+      await env.DB.prepare(
+        'INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+      ).bind(resumeId, 'import_' + fileToken, candidateName + '.pdf', blob.byteLength, b64, new Date().toISOString()).run();
+    } catch {}
+    // 用 AI 从 base64 提取文本
+    const base64Content = b64.substring(0, 100000);
+    const extraction = await callAI(env,
+      'You are a PDF text extractor. Extract ALL readable text from this base64 PDF content. Return ONLY the extracted text, no explanations.',
+      'Extract resume text from this base64 PDF (' + candidateName + '.pdf):\n\n' + base64Content,
+      'deepseek-chat'
+    );
+    if (extraction && extraction.length > 50) {
+      await env.DB.prepare('UPDATE resumes SET raw_text = ? WHERE id = ?')
+        .bind(extraction, resumeId).run();
+      return extraction;
+    }
+  } catch {}
+  return null;
+}
+
 async function getResumeText(env: Env, candidateName: string): Promise<string> {
   try {
     const d1Row = await env.DB.prepare(
@@ -5377,6 +5642,20 @@ async function getResumeText(env: Env, candidateName: string): Promise<string> {
           }
         } catch {}
       }
+
+      // 兜底：从飞书附件下载 PDF 再提取文本
+      try {
+        const tableId = getBitableTableId(env, 'talent');
+        const records = await bitableListRecords(env, tableId);
+        const rec = records.find((r: any) => {
+          const f = r.fields || {};
+          return getFirstValue(f['姓名']) === candidateName;
+        });
+        if (rec) {
+          const extracted = await downloadAndExtractFromFeishu(env, d1Row.id, candidateName, rec.fields || {});
+          if (extracted) return extracted;
+        }
+      } catch {}
     }
     try {
       const tableId = getBitableTableId(env, 'talent');
@@ -5819,6 +6098,162 @@ app.post('/api/resumes/auto-evaluate-all', authMiddleware, async (c) => {
   } catch (e: any) { return c.json({ detail: '批量自动评估失败: ' + e.message }, 500); }
 });
 
+/**
+ * 修复评估不完整的简历（飞书人才库中 AI简历评估 为空/太短/仅含默认模板的记录）
+ * 逻辑：扫描所有记录 → 对不完整的记录 → 从 D1/飞书附件获取 PDF 原文 → 用 reparse 完整 AI 解析 → 写回飞书 & D1
+ */
+app.post('/api/resumes/fix-incomplete-evaluations', authMiddleware, requireRole(['admin']), async (c) => {
+  try {
+    const tableId = getBitableTableId(c.env, 'talent');
+    const records = await bitableListRecords(c.env, tableId);
+
+    let fixed = 0, skipped = 0, failed = 0;
+    const errors: string[] = [], details: any[] = [];
+
+    for (const rec of records) {
+      const f = rec.fields || {};
+      const candidateName = getFirstValue(f['姓名']) || '';
+      const position = getFirstValue(f['面试岗位']) || getFirstValue(f['招聘岗位匹配']) || '';
+      const existingEval = f['AI简历评估'];
+      if (!candidateName) { skipped++; continue; }
+
+      // 判断是否需要修复：空 or 太短 or 只有模板占位
+      const evalStr = String(existingEval || '').trim();
+      const needFix = !evalStr || evalStr.length < 15
+        || evalStr === 'None' || evalStr === '{}' || evalStr.includes('推荐意见: -')
+        || (evalStr.includes('匹配分数: -/100') && evalStr.includes('推荐意见: -'));
+
+      if (!needFix) { skipped++; continue; }
+
+      try {
+        // 获取简历原文
+        const resumeText = await getResumeText(c.env, candidateName);
+        if (resumeText.length < 10) {
+          details.push({ name: candidateName, status: 'no_text', reason: '无法获取简历原文' });
+          skipped++; continue;
+        }
+
+        // 用 reparse 的完整 AI 逻辑
+        const customPrompt = await getCustomPrompt(c.env, 'analyze_resume');
+        let systemPrompt: string, userPrompt: string;
+        if (customPrompt) {
+          let sp = customPrompt.system, up = customPrompt.user;
+          if (sp.includes('{candidate_name}')) sp = sp.replace(/\{candidate_name\}/g, candidateName);
+          if (up.includes('{candidate_name}')) up = up.replace(/\{candidate_name\}/g, candidateName);
+          if (up.includes('{resume_text}')) up = up.replace(/\{resume_text\}/g, resumeText);
+          if (sp.includes('{resume_text}')) sp = sp.replace(/\{resume_text\}/g, resumeText);
+          systemPrompt = sp; userPrompt = up;
+        } else {
+          systemPrompt = `你是一位资深招聘专家和简历解析助手。请解析以下简历文本，提取完整信息并进行AI初筛评估。返回JSON格式（不要加markdown代码块），包含两部分：
+
+第一部分 - 基础信息：
+- candidate_name: 候选人姓名
+- gender: 性别
+- age: 年龄
+- phone: 手机号码
+- email: 电子邮箱
+- highest_degree: 最高学历
+- school: 毕业院校
+- major: 专业
+- graduation_year: 毕业年份
+- years_of_experience: 工作年限
+- current_company: 目前/最近所在公司
+- current_position: 目前/最近职位
+- salary_expectation: 期望薪资
+- skills: 技能列表（数组）
+- certifications: 证书/资质（数组）
+- work_experience: 工作经历数组
+- education: 教育经历数组
+
+第二部分 - AI初筛评估：
+- position: 应聘岗位
+- advantage: 优势分析（中文，3-5个核心优势）
+- risk: 风险点（中文，2-4个劣势或风险）
+- match_score: 人岗匹配度（0-100整数）
+- recommendation: 推荐建议
+- summary: 综合分析摘要（中文，2-3句话）
+- suggested_questions: 建议面试问题（中文，3-5个）`;
+          userPrompt = '简历文本：\n' + resumeText;
+        }
+
+        const result = await callAI(c.env, systemPrompt, userPrompt);
+        let parsed: any;
+        try { parsed = extractJSON(result); } catch { parsed = { raw_response: result }; }
+
+        // Flatten & merge same as reparse
+        const flattened: any = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === 'object' && v !== null && !Array.isArray(v)) Object.assign(flattened, v);
+          else flattened[k] = v;
+        }
+        const merged = { ...parsed, ...flattened };
+        const advantage = merged.advantage || merged.advantages || '';
+        const risk = merged.risk || merged.risks || '';
+        const matchScore = typeof merged.match_score === 'number' ? merged.match_score : null;
+        const recommendation = merged.recommendation || '';
+        const recLabel: Record<string, string> = {
+          'strongly_recommend': '强烈推荐', 'recommend': '推荐',
+          'neutral': '待定', 'not_recommend': '不推荐', 'strongly_not_recommend': '强烈不推荐'
+        };
+        const evalSummary = [
+          merged.summary || '',
+          '',
+          `匹配分数: ${matchScore !== null ? matchScore + '/100' : '-'}`,
+          `推荐意见: ${recLabel[recommendation] || recommendation || '-'}`,
+          '',
+          advantage ? `优势:\n${advantage}` : '',
+          risk ? `\n风险:\n${risk}` : '',
+        ].filter(Boolean).join('\n');
+
+        // 写回飞书
+        try {
+          await bitableUpdateRecord(c.env, tableId, rec.record_id, {
+            'AI简历评估': evalSummary,
+            '优势分析': advantage,
+            '风险点': risk,
+            'AI简历初筛结果': recommendation || '',
+          });
+        } catch (e: any) {
+          console.error(`[FixEval] 飞书更新失败 ${candidateName}: ${e.message}`);
+        }
+
+        // 写回 D1（如果存在记录）
+        try {
+          const d1Row = await c.env.DB.prepare('SELECT id FROM resumes WHERE candidate_name = ? LIMIT 1')
+            .bind(candidateName).first() as any;
+          if (d1Row) {
+            await c.env.DB.prepare(
+              'UPDATE resumes SET parsed_data = ?, ai_review = ?, match_score = ?, screening_result = ?, raw_text = ?, updated_at = ? WHERE id = ?'
+            ).bind(
+              JSON.stringify(merged),
+              evalSummary,
+              matchScore,
+              merged.recommendation || JSON.stringify(merged),
+              resumeText.substring(0, 50000),
+              new Date().toISOString(),
+              d1Row.id
+            ).run();
+          }
+        } catch {}
+
+        details.push({ name: candidateName, status: 'fixed', score: matchScore, recommendation });
+        fixed++;
+      } catch (e: any) {
+        failed++;
+        errors.push(`${candidateName}: ${e.message?.substring(0, 100)}`);
+      }
+    }
+
+    return c.json({
+      ok: true, total: records.length, fixed, skipped, failed,
+      details: details.slice(0, 100),
+      errors: errors.slice(0, 20),
+    });
+  } catch (e: any) {
+    return c.json({ detail: '修复失败: ' + e.message }, 500);
+  }
+});
+
 
 // 修复 position_mappings 中 responsible_person 字段（可能是对象而非字符串）
 app.post('/api/position-mappings/fix-responsible', authMiddleware, requireRole(['admin']), async (c) => {
@@ -6005,8 +6440,103 @@ app.notFound(async (c) => {
   return c.text('Not found', 404);
 });
 
-// Worker Cron 触发器：每天凌晨 3 点清理超过 7 天的 PDF 缓存
-  // Worker Cron 触发器：每天凌晨 3 点清理超过 7 天的 PDF 缓存
+/**
+ * 定时刷新 feishu_tokens 表中的 user_access_token
+ *
+ * 飞书官方文档说明：
+ * - user_access_token 有效期约 7200s（2 小时），具体通过 expires_in 响应字段获取
+ * - refresh_token 有效期约 604800s（7 天），仅能被使用一次
+ * - 刷新后同时返回新的 access_token 和新的 refresh_token
+ * - 建议在到期前调用刷新接口获取新的 token 对，避免 refresh 链断裂
+ *
+ * 策略：每 30 分钟触发一次，查询 access_token 即将在 90 分钟内过期
+ * 或已经过期的记录，提前用 refresh_token 刷新。由于 refresh_token 刷新后
+ * 有效期从 7 天重新计算（新的 refresh_token_expires_in），定期刷新等于一直续期。
+ */
+async function scheduledRefreshFeishuTokens(env: Env) {
+  const nowUnix = Math.floor(Date.now() / 1000);
+  const refreshThreshold = nowUnix + 90 * 60; // 提前 90 分钟刷新（access_token 剩余 1/4 生命周期）
+
+  let refreshed = 0;
+  let failed = 0;
+
+  try {
+    // 查出所有 refresh_token 有效且 access_token 即将/已过期的记录
+    const rows = await env.DB.prepare(`
+      SELECT user_email FROM feishu_tokens
+      WHERE refresh_token IS NOT NULL AND refresh_token != ''
+        AND expires_at < ?
+      ORDER BY expires_at ASC
+      LIMIT 50
+    `).bind(refreshThreshold).all() as any;
+
+    const candidates = (rows.results || []) as Array<{ user_email: string }>;
+
+    for (const row of candidates) {
+      try {
+        const result = await refreshUserFeishuToken(env, row.user_email);
+        if (result) {
+          refreshed++;
+        } else {
+          failed++;
+        }
+      } catch (e: any) {
+        console.error(`[scheduledRefreshFeishuTokens] 刷新 ${row.user_email} 异常: ${e.message}`);
+        failed++;
+      }
+    }
+
+    console.log(`[scheduledRefreshFeishuTokens] 完成: 成功=${refreshed}, 失败=${failed}`);
+  } catch (e: any) {
+    console.error(`[scheduledRefreshFeishuTokens] 查询异常: ${e.message}`);
+  }
+}
+
+// Worker Cron 触发器
+// 🔧 调试端点：查看年度需求表字段结构
+app.get('/api/debug/annual-fields', authMiddleware, async (c) => {
+  try {
+    const srcTableId = c.env.FEISHU_POSITION_TABLE_ID || FEISHU_CONFIG.positionTableId;
+    const token = await getFeishuToken(c.env);
+    const appToken = c.env.FEISHU_BITABLE_APP_TOKEN || FEISHU_CONFIG.appToken;
+    const resp = await fetch(
+      `https://open.feishu.cn/open-apis/bitable/v1/apps/${appToken}/tables/${srcTableId}/records?page_size=2`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const data: any = await resp.json();
+    if (!data.data) return c.json({ error: data });
+    const items = data.data.items || [];
+    const result = items.map((r: any) => ({
+      id: r.record_id,
+      fields: Object.keys(r.fields || {}),
+    }));
+    const allFields = [...new Set(items.flatMap((r: any) => Object.keys(r.fields || {})))].sort();
+    return c.json({ allFieldNames: allFields, records: result });
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
+// 同理查招聘任务表字段
+app.get('/api/debug/requisition-fields', authMiddleware, async (c) => {
+  try {
+    const dstTableId = getBitableTableId(c.env, 'requisition');
+    const token = await getFeishuToken(c.env);
+    const appToken = c.env.FEISHU_BITABLE_APP_TOKEN || FEISHU_CONFIG.appToken;
+    const resp = await fetch(
+      `https://open.feishu.cn/open-apis/bitable/v1/apps/${appToken}/tables/${dstTableId}/records?page_size=2`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const data: any = await resp.json();
+    if (!data.data) return c.json({ error: data });
+    const items = data.data.items || [];
+    const allFields = [...new Set(items.flatMap((r: any) => Object.keys(r.fields || {})))].sort();
+    return c.json({ allFieldNames: allFields });
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     // 🔧 自动迁移：每次请求时 try/catch 安全补列
@@ -6019,6 +6549,8 @@ export default {
       "ALTER TABLE positions ADD COLUMN personalized_requirements TEXT DEFAULT ''",
       "ALTER TABLE positions ADD COLUMN capability_dimensions TEXT DEFAULT '[]'",
       "ALTER TABLE users ADD COLUMN feishu_token TEXT DEFAULT ''",
+      "ALTER TABLE job_requisitions ADD COLUMN personalized_requirements TEXT DEFAULT ''",
+      "ALTER TABLE job_requisitions ADD COLUMN capability_dimensions TEXT DEFAULT ''",
     ];
     for (const sql of colMigrations) {
       try { await env.DB.prepare(sql).run(); } catch { /* already exists */ }
@@ -6026,10 +6558,18 @@ export default {
     return app.fetch(request, env, ctx);
   },
   async scheduled(event: any, env: any, ctx: any) {
-    const days = 7;
-    const deleted = await env.DB.prepare(
-      `DELETE FROM resume_files WHERE created_at < datetime('now', ?)`
-    ).bind(`-${days} days`).run();
-    console.log(`[cron:cleanup-pdfs] deleted ${deleted.meta?.changes || 0} stale resume_files`);
+    const cron = (event as any)?.cron || '';
+
+    if (cron === '*/30 * * * *') {
+      // ✅ 每半小时刷新飞书 token
+      await scheduledRefreshFeishuTokens(env);
+    } else {
+      // 默认：每天凌晨 3 点清理超过 7 天的 PDF 缓存
+      const days = 7;
+      const deleted = await env.DB.prepare(
+        `DELETE FROM resume_files WHERE created_at < datetime('now', ?)`
+      ).bind(`-${days} days`).run();
+      console.log(`[cron:cleanup-pdfs] deleted ${deleted.meta?.changes || 0} stale resume_files`);
+    }
   },
 };

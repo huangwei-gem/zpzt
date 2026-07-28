@@ -14,7 +14,6 @@ import {
   SafetyOutlined,
   HomeOutlined,
   CheckCircleOutlined,
-  FilterOutlined,
   BarChartOutlined,
   FolderOpenOutlined,
   PartitionOutlined,

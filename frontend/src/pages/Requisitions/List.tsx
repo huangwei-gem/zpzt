@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  Card, Table, Button, Space, Tag, Modal, Form, Input, InputNumber, DatePicker,
-  Select, message, Popconfirm, Row, Col, Statistic, Typography, Tooltip
+  Card, Table, Button, Space, Tag, Modal, Form, Input, InputNumber,
+  Select, message, Popconfirm, Row, Col, Typography
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, CheckOutlined, CloseOutlined,
@@ -9,7 +9,6 @@ import {
   ThunderboltOutlined, LoadingOutlined
 } from '@ant-design/icons';
 import request from '../../utils/request';
-import dayjs from 'dayjs';
 
 const { Title } = Typography;
 const { TextArea } = Input;
@@ -21,6 +20,9 @@ const statusConfig: Record<string, { color: string; text: string }> = {
   approved: { color: 'success', text: '已批准' },
   rejected: { color: 'error', text: '已驳回' },
   closed: { color: 'default', text: '已关闭' },
+  open: { color: 'processing', text: '招聘中' },
+  paused: { color: 'orange', text: '暂停' },
+  cancelled: { color: 'default', text: '已终止' },
 };
 
 const urgencyConfig: Record<string, { color: string; text: string }> = {
@@ -39,6 +41,33 @@ const RequisitionsList: React.FC = () => {
   const [searchDept, setSearchDept] = useState('');
   const [filterStatus, setFilterStatus] = useState<string | undefined>();
   const [aiLoading, setAiLoading] = useState<string | null>(null);
+
+  const [syncLoading, setSyncLoading] = useState(false);
+
+  const handleSyncFromAnnual = async () => {
+    Modal.confirm({
+      title: '从飞书年度招聘需求表导入',
+      content: '将自动从飞书多维表格同步年度招聘需求数据到系统，已有需求会更新，新增需求自动创建。',
+      okText: '开始导入',
+      cancelText: '取消',
+      onOk: async () => {
+        setSyncLoading(true);
+        try {
+          const res = await request.post('/requisitions/sync-from-annual') as any;
+          if (res.ok) {
+            message.success(res.message);
+            fetchData();
+          } else {
+            message.error(res.detail || '导入失败');
+          }
+        } catch (e: any) {
+          message.error(e.response?.data?.detail || '导入失败');
+        } finally {
+          setSyncLoading(false);
+        }
+      },
+    });
+  };
 
   const handleAIJD = async (id: string) => {
     setAiLoading(id);
@@ -83,10 +112,7 @@ const RequisitionsList: React.FC = () => {
 
   const handleEdit = (record: any) => {
     setEditing(record);
-    form.setFieldsValue({
-      ...record,
-      expected_date: record.expected_date ? dayjs(record.expected_date) : null,
-    });
+    form.setFieldsValue(record);
     setModalVisible(true);
   };
 
@@ -144,7 +170,7 @@ const RequisitionsList: React.FC = () => {
   const columns = [
     { title: '岗位名称', dataIndex: 'title', key: 'title', width: 180 },
     { title: '部门', dataIndex: 'department', key: 'department', width: 120 },
-    { title: '招聘人数', dataIndex: 'headcount', key: 'headcount', width: 80 },
+    { title: '新增HC数', dataIndex: 'headcount', key: 'headcount', width: 80 },
     {
       title: '紧急程度', dataIndex: 'urgency', key: 'urgency', width: 100,
       render: (v: string) => {
@@ -157,19 +183,11 @@ const RequisitionsList: React.FC = () => {
       render: (v: string) => v || '-'
     },
     {
-      title: '预算', dataIndex: 'budget', key: 'budget', width: 100,
-      render: (v: number) => v ? `\${v}` : '-'
-    },
-    {
       title: '状态', dataIndex: 'status', key: 'status', width: 100,
       render: (v: string) => {
         const c = statusConfig[v] || { color: 'default', text: v };
         return <Tag color={c.color}>{c.text}</Tag>;
       }
-    },
-    {
-      title: '期望到岗', dataIndex: 'expected_date', key: 'expected_date', width: 120,
-      render: (v: string) => v ? dayjs(v).format('YYYY-MM-DD') : '-'
     },
     {
       title: '操作', key: 'action', width: 200, fixed: 'right' as const,
@@ -203,6 +221,7 @@ const RequisitionsList: React.FC = () => {
             </Select>
             <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>提报需求</Button>
+            <Button icon={<ReloadOutlined />} loading={syncLoading} onClick={handleSyncFromAnnual}>从年度需求导入</Button>
           </Space>
         }
       >
@@ -256,16 +275,6 @@ const RequisitionsList: React.FC = () => {
             <Col span={8}>
               <Form.Item name="salary_range" label="薪资范围">
                 <Input placeholder="如：15-25K" />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="budget" label="预算（万/年）">
-                <InputNumber min={0} style={{ width: '100%' }} placeholder="如：30" />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="expected_date" label="期望到岗日期">
-                <DatePicker style={{ width: '100%' }} />
               </Form.Item>
             </Col>
           </Row>
