@@ -28,3 +28,14 @@ Thumbs.db
 !.dev.vars.example
 .env*
 !.env.example
+
+# 飞书脚本（含敏感 secret）
+scripts/_search_feishu_users.py
+scripts/_test_feishu_scope.py
+scripts/build_feishu_contacts.py
+scripts/fetch_all_feishu_contacts.py
+scripts/fetch_feishu_contacts.py
+
+# 飞书数据缓存
+data/*.json
+data/*.sql

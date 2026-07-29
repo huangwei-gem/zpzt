@@ -18,6 +18,7 @@ import {
   FolderOpenOutlined,
   PartitionOutlined,
   MailOutlined,
+  ContactsOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
@@ -100,6 +101,12 @@ const AppLayout: React.FC = () => {
       key: '/settings/mail',
       icon: <MailOutlined />,
       label: '邮件设置',
+      roles: ['admin'],
+    },
+    {
+      key: '/settings/contacts',
+      icon: <ContactsOutlined />,
+      label: '联系人管理',
       roles: ['admin'],
     },
   ];

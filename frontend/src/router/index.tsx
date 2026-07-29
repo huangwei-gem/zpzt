@@ -28,6 +28,7 @@ const OnboardingList = lazy(() => import('../pages/Onboarding/List'));
 const ProbationList = lazy(() => import('../pages/Probation/List'));
 const DailyReportsList = lazy(() => import('../pages/DailyReports/List'));
 const PositionMappings = lazy(() => import('../pages/Settings/PositionMappings'));
+const FeishuContacts = lazy(() => import('../pages/Settings/Contacts'));
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated, loading } = useAuth();
   const location = useLocation();
@@ -156,6 +157,10 @@ const router = createBrowserRouter([
       {
         path: 'settings/mail',
         element: <RoleRoute roles={['admin']}><LazyPage><MailSettings /></LazyPage></RoleRoute>,
+      },
+      {
+        path: 'settings/contacts',
+        element: <RoleRoute roles={['admin']}><LazyPage><FeishuContacts /></LazyPage></RoleRoute>,
       },
       {
         path: 'requisitions',

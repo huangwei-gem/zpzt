@@ -4220,6 +4220,7 @@ app.get('/api/capability-dimension-names', authMiddleware, async (c) => {
 
 // CRUD for recruitment tasks
 registerCrud('recruitment-tasks', 'recruitment_tasks', { status: 'eq', position_name: 'like' });
+registerCrud('feishu-contacts', 'feishu_contacts', { name: 'like' });
 
 // List screening queue with filters
 app.get('/api/resume-screening', authMiddleware, async (c) => {
