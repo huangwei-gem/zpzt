@@ -4198,6 +4198,38 @@ app.post('/api/position-mappings/sync-from-feishu', authMiddleware, async (c) =>
   }
 });
 
+/**
+ * 批量保存岗位映射（创建/更新）：先删后插
+ * POST /api/position-mappings/batch-save
+ */
+app.post('/api/position-mappings/batch-save', authMiddleware, async (c) => {
+  try {
+    const body = await c.req.json();
+    const { mapped_name, raw_names, responsible_person, interviewers } = body;
+    if (!mapped_name || !raw_names || raw_names.length === 0) {
+      return c.json({ detail: '标准岗位名和原始岗位名不能为空' }, 400);
+    }
+    const rawNameList: string[] = Array.isArray(raw_names) ? raw_names : [raw_names];
+
+    // 先删该 mapped_name 下所有旧记录
+    await c.env.DB.prepare('DELETE FROM position_mappings WHERE mapped_name = ?').bind(mapped_name).run();
+
+    // 逐条插入
+    const nowStr = now();
+    for (const rn of rawNameList) {
+      if (!rn.trim()) continue;
+      await c.env.DB.prepare(
+        'INSERT INTO position_mappings (id, raw_name, mapped_name, responsible_person, interviewers, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).bind(uuid(), rn.trim(), mapped_name, responsible_person || '', interviewers ? JSON.stringify(interviewers) : '[]', nowStr, nowStr).run();
+    }
+    console.log(`[batch-save] ✅ ${mapped_name}: ${rawNameList.length} 条`);
+    return c.json({ ok: true, count: rawNameList.length });
+  } catch (e: any) {
+    console.error('[batch-save] ❌', e.message);
+    return c.json({ detail: e.message }, 500);
+  }
+});
+
 registerCrud('position-mappings', 'position_mappings', { raw_name: 'like', mapped_name: 'like' });
 
 // CRUD for capability dimensions
@@ -7543,6 +7575,9 @@ export default {
       "ALTER TABLE job_requisitions ADD COLUMN capability_dimensions TEXT DEFAULT ''",
       "ALTER TABLE feishu_contacts ADD COLUMN created_at TEXT DEFAULT ''",
       "ALTER TABLE feishu_contacts ADD COLUMN id TEXT DEFAULT ''",
+      "ALTER TABLE position_mappings ADD COLUMN responsible_person TEXT DEFAULT ''",
+      "ALTER TABLE position_mappings ADD COLUMN interviewers TEXT DEFAULT ''",
+      "ALTER TABLE position_mappings ADD COLUMN updated_at TEXT DEFAULT ''",
     ];
     for (const sql of colMigrations) {
       try { await env.DB.prepare(sql).run(); } catch { /* already exists */ }
