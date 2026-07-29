@@ -190,17 +190,6 @@ const InterviewsList: React.FC = () => {
         });
       }
 
-      // 负责人筛选（匹配面试官/负责人字段）
-      if (selectedPerson) {
-        const person = selectedPerson.trim();
-        filtered = filtered.filter(r =>
-          r.interviewer === person ||
-          r.primary_interviewer === person ||
-          r.secondary_interviewer === person ||
-          r.biz_owner === person
-        );
-      }
-
       setData(filtered);
     } catch {
       message.error('加载数据失败');
