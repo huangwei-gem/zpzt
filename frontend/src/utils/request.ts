@@ -12,6 +12,12 @@ request.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    // 自动附加全局负责人筛选参数
+    const person = sessionStorage.getItem('responsible_person');
+    if (person) {
+      if (!config.params) config.params = {};
+      config.params.responsible_person = person;
+    }
     return config;
   },
   (error) => {
