@@ -5,6 +5,7 @@ from jose import JWTError, jwt
 from app.config.database import get_db
 from app.models.models import User, UserRole
 from app.schemas.user import Token, UserResponse, UserLogin, TokenData, UserCreate, UserUpdateMe, ChangePasswordRequest
+from sqlalchemy import text
 from app.core.security import verify_password, create_access_token, SECRET_KEY, ALGORITHM, check_roles, get_password_hash, get_current_user_dep
 from datetime import timedelta
 from typing import List
@@ -157,6 +158,37 @@ def create_user(
     db.commit()
     db.refresh(new_user)
     return new_user
+
+@router.get("/responsible-persons")
+def get_responsible_persons(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    获取所有负责人列表（用于前端筛选）
+    从 positions、users、interviews 收集去重
+    """
+    names = set()
+
+    # 从 positions 表的 responsible_person 收集
+    rows = db.execute(text("SELECT DISTINCT responsible_person FROM positions WHERE responsible_person IS NOT NULL AND responsible_person != ''")).fetchall()
+    for (r,) in rows:
+        if r:
+            names.add(r)
+
+    # 从 users 表的 full_name 收集
+    rows = db.execute(text("SELECT DISTINCT full_name FROM users WHERE full_name IS NOT NULL AND full_name != ''")).fetchall()
+    for (r,) in rows:
+        if r:
+            names.add(r)
+
+    # 从 interviews 表收集面试官姓名
+    rows = db.execute(text("SELECT DISTINCT interviewer FROM interviews WHERE interviewer IS NOT NULL AND interviewer != ''")).fetchall()
+    for (r,) in rows:
+        if r:
+            names.add(r)
+
+    return sorted(names)
 
 @router.get("/interviewers", response_model=List[UserResponse])
 def get_interviewers(db: Session = Depends(get_db)):

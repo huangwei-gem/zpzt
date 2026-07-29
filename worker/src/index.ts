@@ -577,16 +577,25 @@ app.get('/api/auth/interviewers', authMiddleware, async (c) => {
 
 /**
  * 获取所有负责人列表（用于前端筛选）
- * 从 recruitment_tasks / position_mappings 收集去重
+ * 从 recruitment_tasks / position_mappings / positions / interviews / users 收集去重
  */
 app.get('/api/auth/responsible-persons', authMiddleware, async (c) => {
-  const [tasks, mappings] = await Promise.all([
+  const [tasks, mappings, posRows, interviewers, users] = await Promise.all([
     c.env.DB.prepare("SELECT DISTINCT responsible_person FROM recruitment_tasks WHERE responsible_person IS NOT NULL AND responsible_person != ''").all(),
     c.env.DB.prepare("SELECT DISTINCT responsible_person FROM position_mappings WHERE responsible_person IS NOT NULL AND responsible_person != ''").all(),
+    c.env.DB.prepare("SELECT DISTINCT responsible_person FROM positions WHERE responsible_person IS NOT NULL AND responsible_person != ''").all(),
+    c.env.DB.prepare("SELECT DISTINCT primary_interviewer FROM interviews WHERE primary_interviewer IS NOT NULL AND primary_interviewer != '' UNION SELECT DISTINCT secondary_interviewer FROM interviews WHERE secondary_interviewer IS NOT NULL AND secondary_interviewer != ''").all(),
+    c.env.DB.prepare("SELECT DISTINCT full_name FROM users WHERE full_name IS NOT NULL AND full_name != ''").all(),
   ]);
   const names = new Set<string>();
   for (const r of (tasks.results || [])) if ((r as any).responsible_person) names.add((r as any).responsible_person);
   for (const r of (mappings.results || [])) if ((r as any).responsible_person) names.add((r as any).responsible_person);
+  for (const r of (posRows.results || [])) if ((r as any).responsible_person) names.add((r as any).responsible_person);
+  for (const r of (interviewers.results || [])) {
+    const v = (r as any).primary_interviewer || (r as any).secondary_interviewer;
+    if (v) names.add(v);
+  }
+  for (const r of (users.results || [])) if ((r as any).full_name) names.add((r as any).full_name);
   const sorted = [...names].sort();
   return c.json(sorted);
 });
@@ -1834,6 +1843,7 @@ app.post('/api/requisitions/sync-from-annual', authMiddleware, async (c) => {
 app.get('/api/interviews/pipeline-candidates', authMiddleware, async (c) => {
   try {
     const search = c.req.query('search') || '';
+    const responsiblePerson = c.req.query('responsible_person') || '';
 
     // 从 resumes 表查询已入库的简历（status='approved'）
     let sql = "SELECT id, candidate_name, parsed_data, position_id, status, created_at FROM resumes WHERE status = 'approved'";
@@ -1897,7 +1907,32 @@ app.get('/api/interviews/pipeline-candidates', authMiddleware, async (c) => {
       };
     });
 
-    return c.json(result);
+    // 后端负责人筛选：通过 position_mappings / positions 查负责人的对应岗位
+    let filtered = result;
+    if (responsiblePerson) {
+      try {
+        const personPositions = new Set<string>();
+        const mapRows = await c.env.DB.prepare(
+          'SELECT mapped_name FROM position_mappings WHERE responsible_person = ?'
+        ).bind(responsiblePerson).all();
+        for (const r of (mapRows.results || [])) personPositions.add((r as any).mapped_name.trim().toLowerCase());
+        const posRows = await c.env.DB.prepare(
+          'SELECT title FROM positions WHERE responsible_person = ?'
+        ).bind(responsiblePerson).all();
+        for (const r of (posRows.results || [])) personPositions.add((r as any).title.trim().toLowerCase());
+
+        filtered = result.filter((r: any) => {
+          const pos = (r.mapped_position || r.position_applied || '').trim().toLowerCase();
+          // 岗位匹配 或 该候选人的面试官之一是筛选人
+          const isInterviewer = r.primary_interviewer === responsiblePerson
+            || r.secondary_interviewer === responsiblePerson
+            || r.interviewer === responsiblePerson;
+          return personPositions.has(pos) || isInterviewer;
+        });
+      } catch { /* 负责人筛选失败时不阻塞 */ }
+    }
+
+    return c.json(filtered);
   } catch (e: any) {
     console.error(`[PipelineCandidates] 错误: ${e.message}`);
     return c.json({ detail: '获取面试流水线数据失败: ' + e.message }, 500);
