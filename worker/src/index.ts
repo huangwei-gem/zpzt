@@ -2192,7 +2192,7 @@ app.post('/api/interviews/create-from-talent', authMiddleware, async (c) => {
           };
 
           try {
-            await sendFeishuMessageWithFallback(c.env, openId, cardContent, preferredToken);
+            await sendFeishuMessageWithFallback(c.env, openId, cardContent, preferredToken, currentUser?.email);
             notificationResults.push(`✅ ${openId} 发送成功`);
           } catch (e: any) {
             notificationResults.push(`❌ ${openId} 发送失败: ${e.message}`);
@@ -4679,7 +4679,7 @@ app.post('/api/daily-reports/:id/send', authMiddleware, async (c) => {
       await sendFeishuMessageToChat(token, target_id, cardContent);
     } else if (target_type === 'user') {
       if (userToken) {
-        await sendFeishuMessageWithFallback(c.env, target_id, cardContent, userToken);
+        await sendFeishuMessageWithFallback(c.env, target_id, cardContent, userToken, currentUser?.email);
       } else {
         await sendFeishuMessageToUser(await getFeishuToken(c.env), target_id, cardContent);
       }
@@ -4880,39 +4880,100 @@ async function getAnyUserFeishuToken(env: Env): Promise<string | null> {
   } catch { return null; }
 }
 
-/** 带 fallback 的消息发送：优先用 user_access_token（过期自动刷新），失败则用 tenant_access_token */
+/**
+ * 取指定用户的有效 user_access_token：优先读 feishu_tokens 表有效记录，
+ * 过期或缺失则用 refresh_token 刷新（refreshUserFeishuToken 会同步写回
+ * users.feishu_token）。这样 notify-interviewer 拿到的永远是活 token，
+ * 不会因为 users.feishu_token 字段过期（2h）而降级到机器人导致 230013。
+ * 返回 null 表示该用户无法获取有效 token（未绑定或 refresh_token 已失效）。
+ */
+async function getUserFeishuToken(env: Env, userEmail: string): Promise<string | null> {
+  if (!userEmail) return null;
+  try {
+    const nowUnix = Math.floor(Date.now() / 1000);
+    // 1. feishu_tokens 表内有未过期记录
+    const validRow = await env.DB.prepare(
+      "SELECT access_token FROM feishu_tokens WHERE user_email = ? AND access_token != '' AND expires_at > ? LIMIT 1"
+    ).bind(userEmail, nowUnix).first() as any;
+    if (validRow?.access_token) {
+      return validRow.access_token;
+    }
+    // 2. 过期但有 refresh_token → 刷新（刷新后同步更新 users.feishu_token）
+    const row = await env.DB.prepare(
+      "SELECT user_email FROM feishu_tokens WHERE user_email = ? AND refresh_token != '' LIMIT 1"
+    ).bind(userEmail).first() as any;
+    if (row?.user_email) {
+      return await refreshUserFeishuToken(env, userEmail);
+    }
+    // 3. feishu_tokens 表无记录，兜底读 users.feishu_token（可能是旧值，调用方自行处理失败）
+    const u = await env.DB.prepare(
+      "SELECT feishu_token FROM users WHERE email = ? AND feishu_token != '' LIMIT 1"
+    ).bind(userEmail).first() as any;
+    return u?.feishu_token || null;
+  } catch { return null; }
+}
+
+/** 发送一条 interactive 卡片消息到指定 receive_id（open_id 或 chat_id），返回飞书原始响应体 */
+async function postFeishuMessage(token: string, receiveIdType: 'open_id' | 'chat_id', receiveId: string, cardContent: any): Promise<any> {
+  const resp = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=' + receiveIdType, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      receive_id: receiveId,
+      msg_type: 'interactive',
+      content: JSON.stringify(cardContent),
+    }),
+  });
+  return await resp.json() as any;
+}
+
+/**
+ * 发送一条飞书卡片消息，带多级 fallback：
+ * 1. preferredToken（可选，通常是当前登录用户的 user_access_token）
+ *    若提供了 userEmail 且 token 过期，会按 email 用 refresh_token 刷新后重试一次
+ * 2. 数据库中任意用户的 feishu_token（getAnyUserFeishuToken，自动刷新）
+ * 3. 最终 fallback：tenant_access_token（机器人身份）
+ *
+ * 注意：第 3 层机器人能发给谁取决于飞书「应用可用范围」，目标用户不在范围内
+ * 会返回 230013 Bot has NO availability to this user。因此应尽量让 1/2 层成功。
+ */
 async function sendFeishuMessageWithFallback(
   env: Env,
   openId: string,
   cardContent: any,
-  preferredToken?: string
+  preferredToken?: string,
+  userEmail?: string
 ): Promise<void> {
-  // 尝试顺序：
-  // 1. 外部传入的 preferredToken（如当前登录用户的 feishu_token）
-  // 2. 数据库中任意用户的 feishu_token（自动刷新过期 token）
-  // 3. 最终 fallback：tenant_access_token
-  
   let lastError: Error | null = null;
 
   // 如果有 preferredToken，直接尝试发送
   if (preferredToken) {
     try {
-      const resp = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${preferredToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          receive_id: openId,
-          msg_type: 'interactive',
-          content: JSON.stringify(cardContent),
-        }),
-      });
-      const data: any = await resp.json();
+      const data: any = await postFeishuMessage(preferredToken, 'open_id', openId, cardContent);
       if (data.code === 0) return;
 
-      // token 过期 → 尝试刷新（根据 user 的 email 找 refresh_token）
+      // token 过期 → 若知道 email 则刷新后重试一次
       if (data.code === 99991677 || data.code === 99991663) {
-        console.log(`[sendFeishuMessageWithFallback] preferredToken 过期，尝试自动刷新...`);
-        // 无法知道 preferredToken 对应的 email，跳过刷新直接 fallback
+        console.log(`[sendFeishuMessageWithFallback] preferredToken 过期(code=${data.code})，尝试自动刷新...`);
+        if (userEmail) {
+          const refreshed = await refreshUserFeishuToken(env, userEmail);
+          if (refreshed && refreshed !== preferredToken) {
+            const retryData: any = await postFeishuMessage(refreshed, 'open_id', openId, cardContent);
+            if (retryData.code === 0) {
+              console.log(`[sendFeishuMessageWithFallback] ✅ 刷新后重试发送成功`);
+              return;
+            }
+            if (retryData.code === 99991677 || retryData.code === 99991663) {
+              lastError = new Error(`刷新后 token 仍过期(${retryData.code}): ${JSON.stringify(retryData.msg || retryData)}`);
+            } else {
+              throw new Error(`发送消息失败(${retryData.code}): ${JSON.stringify(retryData.msg || retryData)}`);
+            }
+          } else {
+            lastError = new Error(`refresh_token 刷新失败，无法续期 user_access_token`);
+          }
+        } else {
+          lastError = new Error(`preferredToken 过期(${data.code}) 且无 userEmail，无法刷新`);
+        }
       } else {
         throw new Error(`发送消息失败(${data.code}): ${JSON.stringify(data.msg || data)}`);
       }
@@ -4929,16 +4990,7 @@ async function sendFeishuMessageWithFallback(
   const dbToken = await getAnyUserFeishuToken(env);
   if (dbToken && dbToken !== preferredToken) {
     try {
-      const resp = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${dbToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          receive_id: openId,
-          msg_type: 'interactive',
-          content: JSON.stringify(cardContent),
-        }),
-      });
-      const data: any = await resp.json();
+      const data: any = await postFeishuMessage(dbToken, 'open_id', openId, cardContent);
       if (data.code === 0) {
         console.log(`[sendFeishuMessageWithFallback] ✅ 使用刷新后的 user_access_token 发送成功`);
         return;
@@ -6303,14 +6355,19 @@ app.post('/api/interviews/:id/notify-interviewer', authMiddleware, async (c) => 
   const candidateName = body.candidate_name || '该候选人';
 
   try {
-    // 1. 拿当前登录用户的 feishu_token
+    // 1. 取当前登录用户的有效 feishu_token（过期自动用 refresh_token 刷新，
+    //    与 cron 定时刷新打通）。避免直接读可能已过期(2h)的 users.feishu_token
+    //    原值，导致发信降级到机器人 tenant_access_token 而触发 230013。
     const meRow = await c.env.DB.prepare(
-      "SELECT feishu_token, feishu_open_id FROM users WHERE email = ? AND feishu_token IS NOT NULL AND feishu_token != ''"
+      "SELECT feishu_token FROM users WHERE email = ? AND feishu_token IS NOT NULL AND feishu_token != ''"
     ).bind(currentUser.email).first() as any;
     if (!meRow?.feishu_token) {
       return c.json({ detail: '你还没绑定飞书，请先在个人设置里绑定飞书账号' }, 400);
     }
-    const myToken = meRow.feishu_token;
+    const myToken = await getUserFeishuToken(c.env, currentUser.email);
+    if (!myToken) {
+      return c.json({ detail: '你的飞书授权已失效（refresh_token 过期），请重新在个人设置里绑定飞书账号' }, 400);
+    }
 
     // 2. 查收件人的 open_id：先用 users 表，再走飞书通讯录搜索
     let targetOpenId = '';
@@ -6397,7 +6454,7 @@ app.post('/api/interviews/:id/notify-interviewer', authMiddleware, async (c) => 
       currentUser?.full_name
     );
     try {
-      await sendFeishuMessageWithFallback(c.env, targetOpenId, cardContent, myToken);
+      await sendFeishuMessageWithFallback(c.env, targetOpenId, cardContent, myToken, currentUser.email);
       return c.json({ ok: true, message: `${currentUser.full_name || '你'} 已提醒面试官 ${interviewerName}: ${candidateName}` });
     } catch (err: any) {
       throw err;
@@ -7138,8 +7195,9 @@ app.post('/api/feishu/sync-contacts', authMiddleware, async (c) => {
     let pageToken: string | undefined;
     let total = 0;
 
-    // 先获取子部门列表，递归扫描所有部门
+    // 先获取子部门列表，递归扫描所有部门，同时建立 ID→名称映射
     const allDeptIds: string[] = ['0'];
+    const deptNameMap: Record<string, string> = { '0': '总公司' };
 
     // 用链表扫描所有部门
     let deptPageToken: string | undefined;
@@ -7151,6 +7209,7 @@ app.post('/api/feishu/sync-contacts', authMiddleware, async (c) => {
       if (deptData.code !== 0) break;
       for (const d of (deptData.data?.items || [])) {
         allDeptIds.push(d.open_department_id);
+        deptNameMap[d.open_department_id] = d.name;
       }
       deptPageToken = deptData.data?.page_token;
     } while (deptPageToken);
@@ -7171,19 +7230,26 @@ app.post('/api/feishu/sync-contacts', authMiddleware, async (c) => {
           const openId = u.open_id || '';
           if (!name || !openId) continue;
 
-          const department = (u.department_ids || []).join(',');
+          // 把 department_ids 从 ID 转为名称
+          const deptIds: string[] = u.department_ids || [];
+          const deptNames = deptIds
+            .map((id: string) => deptNameMap[id] || '')
+            .filter((n: string) => n);
+          const department = deptNames.join(' / ') || '';
           const email = u.email || '';
           const mobile = u.mobile || '';
           const avatarUrl = u.avatar?.avatar_72 || '';
+          const title = u.title || '';
 
           await c.env.DB.prepare(
-            `INSERT INTO feishu_contacts (name, open_id, department, email, mobile, avatar_url, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO feishu_contacts (name, open_id, department, email, mobile, avatar_url, title, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(open_id) DO UPDATE SET
                name = excluded.name, department = excluded.department,
                email = excluded.email, mobile = excluded.mobile,
-               avatar_url = excluded.avatar_url, updated_at = excluded.updated_at`
-          ).bind(name, openId, department, email, mobile, avatarUrl, now()).run();
+               avatar_url = excluded.avatar_url, title = excluded.title,
+               updated_at = excluded.updated_at`
+          ).bind(name, openId, department, email, mobile, avatarUrl, title, now()).run();
           total++;
         }
         pageToken = data.data?.page_token;
