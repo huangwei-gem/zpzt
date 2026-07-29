@@ -170,7 +170,7 @@ const AppLayout: React.FC = () => {
           top: 0,
           bottom: 0,
           zIndex: 100,
-          overflow: 'hidden'
+          overflowY: 'auto'
         }}
       >
         <div style={{ 
@@ -194,7 +194,7 @@ const AppLayout: React.FC = () => {
           selectedKeys={[location.pathname]}
           items={filteredMenuItems}
           onClick={({ key }) => navigate(key)}
-          style={{ padding: '16px 8px', borderRight: 0, overflowY: 'auto', maxHeight: 'calc(100vh - 64px)' }}
+          style={{ padding: '16px 8px', borderRight: 0 }}
         />
       </Sider>
       <Layout style={{ marginLeft: 240 }}>

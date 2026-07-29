@@ -7254,6 +7254,7 @@ export default {
       "ALTER TABLE users ADD COLUMN feishu_token TEXT DEFAULT ''",
       "ALTER TABLE job_requisitions ADD COLUMN personalized_requirements TEXT DEFAULT ''",
       "ALTER TABLE job_requisitions ADD COLUMN capability_dimensions TEXT DEFAULT ''",
+      "ALTER TABLE feishu_contacts ADD COLUMN created_at TEXT DEFAULT ''",
     ];
     for (const sql of colMigrations) {
       try { await env.DB.prepare(sql).run(); } catch { /* already exists */ }
