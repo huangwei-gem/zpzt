@@ -596,7 +596,7 @@ app.get('/api/auth/responsible-persons', authMiddleware, async (c) => {
     if (v) names.add(v);
   }
   for (const r of (users.results || [])) if ((r as any).full_name) names.add((r as any).full_name);
-  const sorted = [...names].sort();
+  const sorted = [...names].filter(n => n !== 'System Admin' && n !== '魏魏').sort();
   return c.json(sorted);
 });
 
