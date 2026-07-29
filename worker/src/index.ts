@@ -575,6 +575,22 @@ app.get('/api/auth/interviewers', authMiddleware, async (c) => {
   return c.json(result.results.map(serializeUser));
 });
 
+/**
+ * 获取所有负责人列表（用于前端筛选）
+ * 从 recruitment_tasks / position_mappings 收集去重
+ */
+app.get('/api/auth/responsible-persons', authMiddleware, async (c) => {
+  const [tasks, mappings] = await Promise.all([
+    c.env.DB.prepare("SELECT DISTINCT responsible_person FROM recruitment_tasks WHERE responsible_person IS NOT NULL AND responsible_person != ''").all(),
+    c.env.DB.prepare("SELECT DISTINCT responsible_person FROM position_mappings WHERE responsible_person IS NOT NULL AND responsible_person != ''").all(),
+  ]);
+  const names = new Set<string>();
+  for (const r of (tasks.results || [])) if ((r as any).responsible_person) names.add((r as any).responsible_person);
+  for (const r of (mappings.results || [])) if ((r as any).responsible_person) names.add((r as any).responsible_person);
+  const sorted = [...names].sort();
+  return c.json(sorted);
+});
+
 // GET /api/question-banks — 题库列表
 app.get('/api/question-banks', authMiddleware, async (c) => {
   const result = await c.env.DB.prepare("SELECT id, name, category, questions FROM question_banks ORDER BY created_at DESC").all();
@@ -1890,7 +1906,7 @@ app.get('/api/interviews/pipeline-candidates', authMiddleware, async (c) => {
 
 registerCrud('positions', 'positions', { title: 'like', status: 'eq', department: 'like' });
 // interviews → 保留 D1（面试记录暂不迁移）
-registerCrud('interviews', 'interviews', { position_id: 'eq', status: 'eq' });
+registerCrud('interviews', 'interviews', { position_id: 'eq', status: 'eq', interviewer: 'eq', primary_interviewer: 'eq' });
 registerCrud('background-checks', 'background_checks', { status: 'eq' });
 registerCrud('onboarding', 'onboarding_records', { status: 'eq' });
 registerCrud('probation', 'probation_records', { status: 'eq', result: 'eq' });

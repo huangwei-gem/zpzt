@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useAuth } from '../../contexts/AuthContext';
+import { useResponsiblePerson } from '../../contexts/ResponsiblePersonContext';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -66,6 +67,7 @@ const InterviewsList: React.FC = () => {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<string | undefined>();
   const [searchDateRange, setSearchDateRange] = useState<[any, any] | null>(null);
+  const { selectedPerson } = useResponsiblePerson();
 
   // 安排面试弹窗
   const [scheduleModalVisible, setScheduleModalVisible] = useState(false);
@@ -173,6 +175,17 @@ const InterviewsList: React.FC = () => {
         filtered = merged.filter(r => r.talent_status === 'approved');
       }
 
+      // 负责人筛选（匹配面试官/负责人字段）
+      if (selectedPerson) {
+        const person = selectedPerson.trim();
+        filtered = filtered.filter(r =>
+          r.interviewer === person ||
+          r.primary_interviewer === person ||
+          r.secondary_interviewer === person ||
+          r.biz_owner === person
+        );
+      }
+
       // 入库时间范围筛选
       if (searchDateRange && searchDateRange[0] && searchDateRange[1]) {
         const startTs = searchDateRange[0].startOf('day').valueOf();
@@ -190,7 +203,7 @@ const InterviewsList: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [search, filterStatus, searchDateRange]);
+  }, [search, filterStatus, searchDateRange, selectedPerson]);
 
   useEffect(() => { fetchMergedData(); }, [fetchMergedData]);
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Layout, Menu, Button, Avatar, Space, Dropdown, theme, Badge } from 'antd';
+import { Layout, Menu, Button, Avatar, Space, Dropdown, theme, Badge, Select } from 'antd';
 import {
   DashboardOutlined,
   UserOutlined,
@@ -21,9 +21,11 @@ import {
   ContactsOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  FilterOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { useResponsiblePerson } from '../../contexts/ResponsiblePersonContext';
 
 const { Header, Sider, Content } = Layout;
 
@@ -31,6 +33,7 @@ const AppLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { logout, user } = useAuth();
+  const { selectedPerson, setSelectedPerson, persons } = useResponsiblePerson();
   const {
     token: { colorBgContainer, borderRadiusLG },
   } = theme.useToken();
@@ -243,6 +246,17 @@ const AppLayout: React.FC = () => {
             {pageTitle}
           </h2>
           <Space size="large">
+            <Select
+              allowClear
+              showSearch
+              placeholder="负责人筛选"
+              value={selectedPerson || undefined}
+              onChange={(val) => setSelectedPerson(val || '')}
+              style={{ width: 160 }}
+              suffixIcon={<FilterOutlined />}
+              optionFilterProp="label"
+              options={persons.map(p => ({ label: p, value: p }))}
+            />
             <Button type="text" icon={<BellOutlined style={{ fontSize: '18px', color: '#64748B' }} />} />
             <Dropdown menu={userMenu}>
               <Space style={{ cursor: 'pointer' }}>
