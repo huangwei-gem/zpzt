@@ -2371,13 +2371,21 @@ app.post('/api/resumes', authMiddleware, async (c) => {
       return c.json({ detail: '创建飞书记录失败' }, 500);
     }
 
-    // 2. 在 D1 保存文件内容（base64）
+    // 2. 在 D1 保存文件内容（base64）— 只存小文件，超过 800KB 跳过（D1 单字段上限 1MB）
     try {
-      await c.env.DB.prepare(
-        `INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`
-      ).bind(recordId, fileId, file.name, fileSize, fileBase64).run();
+      if (fileSize < 800000) {
+        await c.env.DB.prepare(
+          `INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`
+        ).bind(recordId, fileId, file.name, fileSize, fileBase64).run();
+      } else {
+        console.log(`[Upload] 跳过 D1 存储：文件 ${file.name} 超出大小限制 (${fileSize} bytes)`);
+      }
     } catch (e: any) {
-      return c.json({ detail: '保存文件失败: ' + e.message }, 500);
+      if (String(e.message).includes('TOOBIG') || String(e.message).includes('too big')) {
+        console.log(`[Upload] D1 TOOBIG: ${file.name} (${fileSize} bytes), 跳过文件存储，下载时走飞书附件`);
+      } else {
+        return c.json({ detail: '保存文件失败: ' + e.message }, 500);
+      }
     }
 
     // 3. AI 解析简历（优先使用前端用 pdfjs 提取好的纯文本，准确率高得多）
