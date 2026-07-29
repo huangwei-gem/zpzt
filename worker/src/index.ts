@@ -4631,7 +4631,8 @@ app.post('/api/daily-reports/:id/send', authMiddleware, async (c) => {
         r.report_date || reportData.date || '未知日期',
         reportData.owners,
         reportData.total || { grandTotal: 0, grandPending: 0, grandApproved: 0, grandRejected: 0 },
-        aiSummary
+        aiSummary,
+        reportData.overall
       );
       // 替换 header 标题为原标题
       cardContent.header.title.content = `📊 ${r.title || '招聘日报'}`;
@@ -5797,20 +5798,45 @@ app.post('/api/cron/daily-report', async (c) => {
     try {
       const statsForAi = {
         日期: dateStr,
+        全链路统计: `待筛选${overallStats.pending_screening}人, 面试中${overallStats.active_interviews}人, 已通过${overallStats.approved_candidates}人, 入职中${overallStats.onboarding_count}人, 开放需求${overallStats.open_requisitions}个`,
         负责人统计: ownerStats.map(s => `${s.name}: 总${s.total}人(待处理${s.pending}, 已入库${s.approved}, 淘汰${s.rejected})`),
         总计: `总${grandTotal}人(待处理${grandPending}, 已入库${grandApproved}, 淘汰${grandRejected})`
       };
       aiSummary = await callAI(c.env,
-        '你是招聘数据分析专家。根据按负责人分组的招聘统计数据生成一份简洁的日报摘要（中文，50~80字），包含整体进展概述和需要注意的关键点。直接输出纯文字，不要markdown。',
+        '你是招聘数据分析专家。根据招聘统计数据生成一份简洁的日报摘要（中文，50~80字），包含整体进展概述和需要注意的关键点。直接输出纯文字，不要markdown。',
         `日期：${dateStr}\n统计：${JSON.stringify(statsForAi, null, 2)}`
       );
     } catch {}
 
-    // 4. 构建统计数据（存库用）
+    // 4. 查询全链路统计（待筛选 / 面试中 / 已通过 / 入职中 / 开放需求）
+    const [
+      pendingScreening,
+      activeInterviews,
+      approvedCandidates,
+      onboardingCount,
+      openRequisitions,
+    ] = await Promise.all([
+      c.env.DB.prepare("SELECT COUNT(*) as c FROM resume_screening_queue WHERE status = 'pending'").first(),
+      c.env.DB.prepare("SELECT COUNT(*) as c FROM interviews WHERE status IN ('scheduled','in_progress')").first(),
+      c.env.DB.prepare("SELECT COUNT(*) as c FROM interviews WHERE result = 'pass' OR status2 = 'passed'").first(),
+      c.env.DB.prepare("SELECT COUNT(*) as c FROM onboarding_records WHERE status = 'pending'").first(),
+      c.env.DB.prepare("SELECT COUNT(*) as c FROM job_requisitions WHERE status IN ('pending','approved')").first(),
+    ]).catch(() => [0,0,0,0,0].map(() => ({c:0})));
+
+    const overallStats = {
+      pending_screening: pendingScreening?.c ?? 0,
+      active_interviews: activeInterviews?.c ?? 0,
+      approved_candidates: approvedCandidates?.c ?? 0,
+      onboarding_count: onboardingCount?.c ?? 0,
+      open_requisitions: openRequisitions?.c ?? 0,
+    };
+
+    // 5. 构建统计数据（存库用）
     const reportStats = {
       date: dateStr,
       owners: ownerStats,
       total: { grandTotal, grandPending, grandApproved, grandRejected },
+      overall: overallStats,
       ai_summary: aiSummary,
     };
 
@@ -5825,7 +5851,7 @@ app.post('/api/cron/daily-report', async (c) => {
     const chatId = FEISHU_CONFIG.recruitmentGroupChatId;
     if (chatId) {
       const token = await getFeishuToken(c.env);
-      const cardContent = buildDailyReportCard(dateStr, ownerStats, { grandTotal, grandPending, grandApproved, grandRejected }, aiSummary);
+      const cardContent = buildDailyReportCard(dateStr, ownerStats, { grandTotal, grandPending, grandApproved, grandRejected }, aiSummary, overallStats);
       await sendFeishuMessageToChat(token, chatId, cardContent);
     }
 
@@ -5836,6 +5862,7 @@ app.post('/api/cron/daily-report', async (c) => {
         date: dateStr,
         owners: ownerStats,
         total: { grandTotal, grandPending, grandApproved, grandRejected },
+        overall: overallStats,
         aiSummary,
       }
     });
@@ -5992,52 +6019,48 @@ function buildInterviewerCard(name: string, position: string, city: string, anal
 
 /**
  * 构建招聘日报飞书卡片
- * 顶部 4 个统计大数字块 + 各负责人明细表 + AI 摘要
+ * 顶部 5 个全链路统计块（待筛选/面试中/已通过/入职中/开放需求）
+ * 下方一个表格：合计行 + 3 负责人行（负责人/总简历/待处理/已入库/淘汰）
+ * + AI 摘要 + 操作按钮
  */
 function buildDailyReportCard(
   dateStr: string,
   ownerStats: { name: string; total: number; pending: number; approved: number; rejected: number }[],
   totals: { grandTotal: number; grandPending: number; grandApproved: number; grandRejected: number },
-  aiSummary: string
+  aiSummary: string,
+  overall?: { pending_screening: number; active_interviews: number; approved_candidates: number; onboarding_count: number; open_requisitions: number }
 ): any {
   const elements: any[] = [];
 
-  // 入库率
-  const rate = totals.grandTotal > 0 ? Math.round((totals.grandApproved / totals.grandTotal) * 100) : 0;
-
-  // 1. 顶部 4 列统计大数字（灰底分栏）
+  // 1. 顶部 5 列全链路统计大数字（灰底分栏）
   const stat = (label: string, value: number, icon: string, color: string) => ({
     tag: 'column', width: 'weighted', weight: 1, vertical_align: 'top',
     elements: [
-      { tag: 'markdown', text_align: 'center',
-        content: `<font color='grey'>${icon} ${label}</font>\n<font color='${color}'>**${value}**</font>` }
+      {
+        tag: 'markdown', text_align: 'center',
+        content: `<font color='grey'>${icon} ${label}</font>\n<font color='${color}'>**${value}**</font>`
+      }
     ]
   });
   elements.push({
     tag: 'column_set', flex_mode: 'bisect', background_style: 'grey', horizontal_spacing: 'small',
     columns: [
-      stat('总简历', totals.grandTotal, '📥', 'black'),
-      stat('待处理', totals.grandPending, '⏳', 'orange'),
-      stat('已入库', totals.grandApproved, '✅', 'green'),
-      stat('淘汰', totals.grandRejected, '🗑️', 'red'),
+      stat('待筛选', overall?.pending_screening ?? totals.grandPending, '📥', 'orange'),
+      stat('面试中', overall?.active_interviews ?? 0, '🤝', 'blue'),
+      stat('已通过', overall?.approved_candidates ?? totals.grandApproved, '✅', 'green'),
+      stat('入职中', overall?.onboarding_count ?? 0, '📋', 'purple'),
+      stat('开放需求', overall?.open_requisitions ?? 0, '📌', 'red'),
     ]
-  });
-
-  // 2. 入库率进度条式提示
-  elements.push({
-    tag: 'div',
-    text: { tag: 'lark_md', content: `整体入库率：<font color='green'>**${rate}%**</font>  （${totals.grandApproved}/${totals.grandTotal}）` }
   });
 
   elements.push({ tag: 'hr' });
 
-  // 3. 各负责人明细表（表头 + 数据行 + 合计行），统一用新版 column 嵌套写法
+  // 2. 负责人明细表（共 N+1 行：合计 + N 位负责人）
+  // 表头
   const col = (content: string, weight = 1, align: 'left' | 'center' = 'center') => ({
     tag: 'column', width: 'weighted', weight, vertical_align: 'top',
     elements: [{ tag: 'markdown', content, text_align: align }]
   });
-
-  // 表头
   elements.push({
     tag: 'column_set', flex_mode: 'none', background_style: 'grey', horizontal_spacing: 'small',
     columns: [
@@ -6049,8 +6072,21 @@ function buildDailyReportCard(
     ]
   });
 
-  // 数据行
-  for (const s of ownerStats) {
+  // 合计行（数据行 1/4）
+  elements.push({
+    tag: 'column_set', flex_mode: 'none', background_style: 'grey', horizontal_spacing: 'small',
+    columns: [
+      col('**合计**', 2, 'left'),
+      col(`**${totals.grandTotal}**`, 1),
+      col(totals.grandPending > 0 ? `⚠️ **${totals.grandPending}**` : `**${totals.grandPending}**`, 1),
+      col(`✅ **${totals.grandApproved}**`, 1),
+      col(totals.grandRejected > 0 ? `❌ **${totals.grandRejected}**` : `**${totals.grandRejected}**`, 1),
+    ]
+  });
+
+  // 负责人数据行（数据行 2/3/4...，取前 3 个）
+  const topOwners = ownerStats.slice(0, 3);
+  for (const s of topOwners) {
     elements.push({
       tag: 'column_set', flex_mode: 'none', background_style: 'default', horizontal_spacing: 'small',
       columns: [
@@ -6063,19 +6099,7 @@ function buildDailyReportCard(
     });
   }
 
-  // 合计行
-  elements.push({
-    tag: 'column_set', flex_mode: 'none', background_style: 'grey', horizontal_spacing: 'small',
-    columns: [
-      col('**合计**', 2, 'left'),
-      col(`**${totals.grandTotal}**`, 1),
-      col(totals.grandPending > 0 ? `⚠️ **${totals.grandPending}**` : `**${totals.grandPending}**`, 1),
-      col(`✅ **${totals.grandApproved}**`, 1),
-      col(totals.grandRejected > 0 ? `❌ **${totals.grandRejected}**` : `**${totals.grandRejected}**`, 1),
-    ]
-  });
-
-  // 4. AI 摘要
+  // 3. AI 摘要
   const summaryText = (aiSummary || '').trim();
   if (summaryText) {
     elements.push({ tag: 'hr' });
@@ -6085,7 +6109,7 @@ function buildDailyReportCard(
     });
   }
 
-  // 5. 操作 + 备注
+  // 4. 按钮 + 备注
   elements.push({ tag: 'hr' });
   elements.push({
     tag: 'action',
@@ -6113,7 +6137,7 @@ function buildDailyReportCard(
     config: { wide_screen_mode: true },
     header: {
       title: { tag: 'plain_text', content: `📊 招聘日报 · ${dateStr}` },
-      subtitle: { tag: 'plain_text', content: `共 ${ownerStats.length} 位负责人 · ${totals.grandTotal} 份简历` },
+      subtitle: { tag: 'plain_text', content: `共 ${ownerStats.length} 位负责人 · 全链路统计` },
       template: 'turquoise',
       ud_icon: { tag: 'chart_ring_filled', color: 'turquoise' }
     },
