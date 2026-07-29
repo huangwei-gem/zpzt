@@ -26,7 +26,11 @@ export const ResponsiblePersonProvider: React.FC<{ children: ReactNode }> = ({ c
 
   const handleSetPerson = useCallback((person: string) => {
     setSelectedPerson(person);
-    sessionStorage.setItem('responsible_person', person);
+    if (person) {
+      sessionStorage.setItem('responsible_person', person);
+    } else {
+      sessionStorage.removeItem('responsible_person');
+    }
   }, []);
 
   const fetchPersons = useCallback(async () => {
