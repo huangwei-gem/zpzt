@@ -1,0 +1,1 @@
+{"action":"evaluate","args":{"code":"sessionStorage.getItem('responsible_person')"},"session":"debug"}

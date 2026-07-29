@@ -1,0 +1,1 @@
+{"action":"evaluate","args":{"code":"(() => { const tb=document.querySelector('.ant-table'); const crd=document.querySelector('.ant-card'); const ct=document.querySelector('.page-container'); return JSON.stringify({url:location.href, table:!!tb, card:!!crd, container:!!ct, bodyLen:document.body?.innerText?.length||0, title:document.title}); })()"},"session":"debug"}

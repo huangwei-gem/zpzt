@@ -1,0 +1,1 @@
+{"action":"evaluate","args":{"code":"sessionStorage.removeItem('responsible_person'); location.reload(); 'cleared and reloading'"}

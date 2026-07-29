@@ -135,6 +135,108 @@ async function verifyJwt(secretKey: string, token: string): Promise<any | null> 
   } catch { return null; }
 }
 
+// ==================== MinerU PDF 文本提取 ====================
+// 使用 MinerU API 从 PDF 中提取高质量文本，替代前端 pdf.js 兜底方案
+const MINERU_BASE_URL = 'https://mineru.net';
+// 用户提供的 MinerU API Key
+const MINERU_API_KEY = 'sk-qWPs7w8gNAgJJnDmKxW2ZFyAhNfMTrBgl1271XCbizmEclJr';
+
+/**
+ * 使用 MinerU v4 API 提取 PDF 文本
+ * 1. 上传 PDF 到临时存储
+ * 2. 创建提取任务
+ * 3. 轮询直到完成
+ * 4. 下载并返回提取的文本内容
+ */
+async function extractTextWithMinerU(fileBuffer: ArrayBuffer, fileName: string): Promise<string> {
+  try {
+    // 第一步：上传文件到 MinerU（使用 Agent API 上传文件）
+    const formData = new FormData();
+    const blob = new Blob([fileBuffer], { type: 'application/pdf' });
+    formData.append('file', blob, fileName);
+
+    const uploadResp = await fetch(`${MINERU_BASE_URL}/api/v1/agent/parse/file`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!uploadResp.ok) {
+      const errText = await uploadResp.text().catch(() => '');
+      console.warn(`[MinerU] Agent API 上传失败: ${uploadResp.status} ${errText.substring(0, 200)}`);
+      throw new Error(`MinerU upload failed: ${uploadResp.status}`);
+    }
+
+    const uploadResult: any = await uploadResp.json();
+    const taskId = uploadResult?.data?.task_id;
+    if (!taskId) {
+      throw new Error('MinerU 未返回 task_id');
+    }
+
+    // 第二步：轮询直到任务完成（最多等 120 秒）
+    const pollUrl = `${MINERU_BASE_URL}/api/v1/agent/parse/task/${taskId}`;
+    const maxAttempts = 40;
+    const pollInterval = 3000;
+
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(r => setTimeout(r, pollInterval));
+      try {
+        const pollResp = await fetch(pollUrl, { method: 'GET' });
+        if (!pollResp.ok) continue;
+        const pollResult: any = await pollResp.json();
+        const state = pollResult?.data?.state;
+
+        if (state === 'done') {
+          // 任务完成，获取结果
+          const resultUrl = pollResult?.data?.result_url || pollResult?.data?.full_zip_url;
+          if (resultUrl) {
+            const resultResp = await fetch(resultUrl);
+            if (resultResp.ok) {
+              const resultText = await resultResp.text();
+              // 从 zip 或 json 响应中提取纯文本
+              return extractTextFromMinerUResult(resultText, resultResp.headers.get('content-type') || '');
+            }
+          }
+          // 如果有 direct_url 字段，直接获取
+          const fullText = pollResult?.data?.full_text || pollResult?.data?.extracted_text || '';
+          if (fullText) return fullText;
+
+          return JSON.stringify(pollResult?.data || {});
+        } else if (state === 'failed') {
+          console.warn(`[MinerU] 任务失败: ${pollResult?.data?.err_msg || '未知错误'}`);
+          return '';
+        }
+        // state === 'pending' || 'running' → 继续轮询
+      } catch (pollErr: any) {
+        // 轮询异常继续
+      }
+    }
+    console.warn('[MinerU] 轮询超时');
+    return '';
+  } catch (err: any) {
+    console.error(`[MinerU] 提取失败: ${err.message}`);
+    return '';
+  }
+}
+
+/** 从 MinerU 结果中提取纯文本（支持 zip 和 JSON 格式） */
+function extractTextFromMinerUResult(resultText: string, contentType: string): string {
+  try {
+    // 如果是 JSON，提取 markdown 或 text 字段
+    if (contentType.includes('json') || resultText.trim().startsWith('{') || resultText.trim().startsWith('[')) {
+      const parsed = JSON.parse(resultText);
+      // 可能是对象数组，每个对象有 markdown/text 字段
+      if (Array.isArray(parsed)) {
+        return parsed.map((item: any) => item.markdown || item.text || item.content || '').join('\n\n').trim();
+      }
+      return parsed.markdown || parsed.text || parsed.content || parsed.data?.markdown || parsed.data?.text || '';
+    }
+    // 如果是 markdown/文本，直接返回
+    return resultText;
+  } catch {
+    return resultText || '';
+  }
+}
+
 async function hashPassword(secretKey: string, password: string): Promise<string> {
   return bufToB64(await hmacSha256(secretKey, password));
 }
@@ -930,7 +1032,7 @@ function makeListHandler(table: string, filters: FilterConfig = {}) {
       conditions.push(`(candidate_name LIKE ? OR email LIKE ?)`);
       binds.push(`%${search}%`, `%${search}%`);
     }
-    // 全局负责人筛选
+    // 全局负责人筛选（支持 D1 层面的级联过滤）
     const rp = c.req.query('responsible_person');
     if (rp) {
       if (table === 'positions') {
@@ -943,11 +1045,16 @@ function makeListHandler(table: string, filters: FilterConfig = {}) {
         conditions.push(`position_id IN (SELECT id FROM positions WHERE responsible_person = ?)`);
         binds.push(rp);
       } else if (table === 'resumes') {
-        // resumes 表通过 position_id 关联
-        conditions.push(`position_id IN (SELECT id FROM positions WHERE responsible_person = ?)`);
+        conditions.push(`(position_id IN (SELECT id FROM positions WHERE responsible_person = ?) OR biz_owner = ?)`);
+        binds.push(rp, rp);
+      } else if (table === 'onboarding_records') {
+        conditions.push(`resume_id IN (SELECT id FROM resumes WHERE position_id IN (SELECT id FROM positions WHERE responsible_person = ?))`);
+        binds.push(rp);
+      } else if (table === 'probation_records') {
+        conditions.push(`id IN (SELECT id FROM onboarding_records WHERE resume_id IN (SELECT id FROM resumes WHERE position_id IN (SELECT id FROM positions WHERE responsible_person = ?)))`);
         binds.push(rp);
       } else {
-        // 其他表统一用 position_id 关联
+        // 其他表通用：尝试用 position_id 关联
         conditions.push(`position_id IN (SELECT id FROM positions WHERE responsible_person = ?)`);
         binds.push(rp);
       }
@@ -2082,6 +2189,38 @@ app.post('/api/interviews/:id/evaluate', authMiddleware, async (c) => {
       ).bind(...binds).run();
     }
 
+    // 如果面试通过，自动创建入职管理记录（流转到下一阶段）
+    if (result === 'passed') {
+      try {
+        const interview = await c.env.DB.prepare('SELECT * FROM interviews WHERE id = ?').bind(id).first() as any;
+        if (interview) {
+          const resume = await c.env.DB.prepare('SELECT * FROM resumes WHERE id = ?').bind(interview.resume_id).first() as any;
+          if (resume) {
+            let parsed: any = {};
+            try { parsed = JSON.parse(resume.parsed_data || '{}'); } catch {}
+            const candidateName = resume.candidate_name || '未知';
+            const positionTitle = parsed.mapped_position || parsed.position_applied || '';
+
+            // 检查是否已存在入职记录
+            const existingOnboarding = await c.env.DB.prepare(
+              'SELECT id FROM onboarding_records WHERE resume_id = ?'
+            ).bind(resume.id).first();
+
+            if (!existingOnboarding) {
+              const onboardId = 'ob_' + crypto.randomUUID();
+              await c.env.DB.prepare(
+                `INSERT INTO onboarding_records (id, resume_id, candidate_name, position_title, status, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, 'pending', ?, ?)`
+              ).bind(onboardId, resume.id, candidateName, positionTitle, now(), now()).run();
+              console.log(`[InterviewEval] 面试通过，自动创建入职记录: ${onboardId} (${candidateName})`);
+            }
+          }
+        }
+      } catch (piErr: any) {
+        console.error(`[InterviewEval] 创建入职记录失败: ${piErr.message}`);
+      }
+    }
+
     return c.json({ ok: true, detail: `第${r}面评价已提交` });
   } catch (e: any) {
     return c.json({ detail: '提交失败: ' + e.message }, 500);
@@ -2394,34 +2533,34 @@ app.post('/api/resumes', authMiddleware, async (c) => {
     }
 
     // 2. 保存文件内容到 D1（小文件）或上传到飞书云盘（大文件）
+    // 注意：D1 的 blob/string 限制约 1MB，base64 编码比原始数据大 ~33%
+    const D1_STORAGE_LIMIT = 500000;
+    let fileStored = false;
     try {
-      if (fileSize < 800000) {
+      if (fileSize < D1_STORAGE_LIMIT) {
         await c.env.DB.prepare(
           `INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`
         ).bind(recordId, fileId, file.name, fileSize, fileBase64).run();
-      } else {
-        // 大文件上传到飞书云盘，然后挂到 Bitable 记录上
-        try {
-          const feishuToken = await getFeishuToken(c.env);
-          const fileToken = await uploadToFeishuDrive(feishuToken, file.name, fileBuffer, c.env.FEISHU_DRIVE_FOLDER_TOKEN || FEISHU_CONFIG.driveFolderToken);
-          if (fileToken) {
-            // 更新 Bitable 记录，挂上附件
-            await bitableUpdateRecord(c.env, tableId, recordId, {
-              '简历附件-批量导入': [{ file_token: fileToken, name: file.name, type: 'pdf', size: fileSize }],
-            });
-            console.log(`[Upload] 大文件 ${file.name} (${fileSize} bytes) 已上传到飞书云盘 file_token=${fileToken}`);
-          } else {
-            console.log(`[Upload] 飞书云盘上传失败 ${file.name}，跳过文件存储`);
-          }
-        } catch (uploadErr: any) {
-          console.log(`[Upload] 飞书云盘上传异常: ${uploadErr.message}，跳过文件存储`);
-        }
+        fileStored = true;
       }
     } catch (e: any) {
-      if (String(e.message).includes('TOOBIG') || String(e.message).includes('too big')) {
-        console.log(`[Upload] D1 TOOBIG: ${file.name} (${fileSize} bytes), 跳过文件存储`);
-      } else {
-        return c.json({ detail: '保存文件失败: ' + e.message }, 500);
+      console.log(`[Upload] D1 存储失败: ${e.message}，尝试飞书云盘`);
+    }
+    // 大文件或 D1 存储失败时 → 飞书云盘
+    if (!fileStored) {
+      try {
+        const feishuToken = await getFeishuToken(c.env);
+        const fileToken = await uploadToFeishuDrive(feishuToken, file.name, fileBuffer, c.env.FEISHU_DRIVE_FOLDER_TOKEN || FEISHU_CONFIG.driveFolderToken);
+        if (fileToken) {
+          await bitableUpdateRecord(c.env, tableId, recordId, {
+            '简历附件-批量导入': [{ file_token: fileToken, name: file.name, type: 'pdf', size: fileSize }],
+          });
+          console.log(`[Upload] 文件 ${file.name} (${fileSize} bytes) 已上传到飞书云盘 file_token=${fileToken}`);
+        } else {
+          console.log(`[Upload] 飞书云盘上传失败 ${file.name}，跳过文件存储`);
+        }
+      } catch (uploadErr: any) {
+        console.log(`[Upload] 飞书云盘上传异常: ${uploadErr.message}，跳过文件存储`);
       }
     }
 
@@ -2440,13 +2579,31 @@ app.post('/api/resumes', authMiddleware, async (c) => {
     let parsedWorkYears: number | null = null;
     let parsedExperience: string = '';
     try {
-      // 优先取前端 pdfjs 提取的纯文本（质量最好，无 AI 幻觉）
+      // 优先取前端 pdfjs 提取的纯文本（质量好，无 AI 幻觉）
       let pdfText = formData.get('pdf_text')?.toString().trim() || '';
       let extractedText = pdfText || '';
 
-      // 前端没传文本时，兜底用 AI 从 base64 中提取（准确率较低，但有胜于无）
+      // 前端没传文本时，使用 MinerU 提取（比 AI 从 base64 提取更准确）
       if (!extractedText || extractedText.length < 20) {
-        console.log('[Upload] 前端未传 pdf_text，走 AI base64 提取兜底');
+        console.log('[Upload] 前端未传 pdf_text，使用 MinerU 提取 PDF 文本');
+        try {
+          extractedText = await extractTextWithMinerU(fileBuffer, file.name);
+          if (extractedText && extractedText.length > 20) {
+            console.log(`[Upload] MinerU 提取成功: ${extractedText.length} 字符`);
+          } else {
+            // MinerU 失败，兜底用 AI 从 base64 提取
+            console.log('[Upload] MinerU 提取文本不足，走 AI base64 提取兜底');
+            extractedText = '';
+          }
+        } catch (mineruErr: any) {
+          console.warn(`[Upload] MinerU 提取异常: ${mineruErr.message}，走 AI base64 兜底`);
+          extractedText = '';
+        }
+      }
+
+      // 最后兜底：用 AI 从 base64 中提取
+      if (!extractedText || extractedText.length < 20) {
+        console.log('[Upload] 走 AI base64 提取兜底');
         const extractionPrompt = `你是一个PDF简历文本提取助手。下面是一份PDF简历的base64编码数据。请仔细阅读内容，将其转换为结构化的Markdown文本。保留所有可读的信息：姓名、联系方式、工作经历、教育背景、技能、项目经历等。如果内容中包含乱码或无法识别的字符，尽最大努力推断正确内容。直接输出Markdown文本，不要添加任何额外说明。`;
         extractedText = await callAI(c.env, extractionPrompt,
           `以下是一份PDF简历的base64编码数据，请提取其中所有可读文本并转为Markdown格式（保留所有信息）：\n\n${fileBase64.substring(0, 32000)}${fileBase64.length > 32000 ? '\n\n[内容截断]' : ''}`, 'deepseek-chat');
@@ -3499,6 +3656,7 @@ app.post('/api/resumes/:id/override-rejection', authMiddleware, async (c) => {
 });
 
 // 简历管理页面：入库 → 更新飞书多维表格 + 同步 D1（面试流水线数据源）
+// 入库后候选人自动进入面试管理流水线
 app.post('/api/resumes/:id/approve-to-talent-pool', authMiddleware, async (c) => {
   const id = c.req.param('id');
   const talentTableId = getBitableTableId(c.env, 'talent');
@@ -3511,26 +3669,28 @@ app.post('/api/resumes/:id/approve-to-talent-pool', authMiddleware, async (c) =>
   const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
   try {
     const existingResume = await c.env.DB.prepare('SELECT * FROM resumes WHERE id = ?').bind(id).first();
+    const f = record.fields || {};
+    const candidateName = getFirstValue(f['姓名']) || '未知';
+    const positionApplied = getFirstValue(f['面试岗位'] || f['招聘岗位']) || '未知';
+    const education = getFirstValue(f['学历']) || '';
+    const city = getFirstValue(f['城市']) || '';
+    const aiEval = getFirstValue(f['AI简历评估']) || '';
+    const hrResult = '通过';
+    const advantage = getFirstValue(f['优势分析']) || '';
+    const risk = getFirstValue(f['风险点']) || '';
+    const mappedPosition = getFirstValue(f['招聘岗位匹配']) || positionApplied;
+    const bizOwner = getFirstValue(f['业务负责人']) || '待分配';
+    const parsedData = {
+      position_applied: positionApplied, mapped_position: mappedPosition,
+      education, city, advantage, risk, biz_owner: bizOwner,
+      screening_result: '已入库', hr_review: hrResult,
+    };
+
     if (existingResume) {
-      await c.env.DB.prepare("UPDATE resumes SET status = 'approved', created_at = ? WHERE id = ?").bind(now, id).run();
+      await c.env.DB.prepare(
+        "UPDATE resumes SET status = 'approved', parsed_data = ?, created_at = ?, candidate_name = ? WHERE id = ?"
+      ).bind(JSON.stringify(parsedData), now, candidateName, id).run();
     } else {
-      // D1 中无对应记录则插入一条（用飞书字段）
-      const f = record.fields || {};
-      const candidateName = getFirstValue(f['姓名']) || '未知';
-      const positionApplied = getFirstValue(f['面试岗位'] || f['招聘岗位']) || '未知';
-      const education = getFirstValue(f['学历']) || '';
-      const city = getFirstValue(f['城市']) || '';
-      const aiEval = getFirstValue(f['AI简历评估']) || '';
-      const hrResult = getFirstValue(f['HR复核结果']) || '';
-      const advantage = getFirstValue(f['优势分析']) || '';
-      const risk = getFirstValue(f['风险点']) || '';
-      const mappedPosition = getFirstValue(f['招聘岗位匹配']) || positionApplied;
-      const bizOwner = getFirstValue(f['业务负责人']) || '待分配';
-      const parsedData = {
-        position_applied: positionApplied, mapped_position: mappedPosition,
-        education, city, advantage, risk, biz_owner: bizOwner,
-        screening_result: '已入库', hr_review: hrResult,
-      };
       await c.env.DB.prepare(
         `INSERT INTO resumes (id, candidate_name, status, hr_review, raw_text, created_at, parsed_data)
          VALUES (?, ?, 'approved', ?, ?, ?, ?)`
@@ -3538,7 +3698,6 @@ app.post('/api/resumes/:id/approve-to-talent-pool', authMiddleware, async (c) =>
     }
   } catch (e: any) {
     console.error(`[ApproveToTalentPool] D1 同步失败: ${e.message}`);
-    // 不影响飞书侧操作结果
   }
 
   record = await bitableGetRecord(c.env, talentTableId, id);

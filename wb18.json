@@ -1,0 +1,1 @@
+{"action":"evaluate","args":{"code":"Promise.all([fetch('/api/resumes',{headers:{Authorization:'Bearer '+localStorage.getItem('token')}}).then(r=>r.json()),fetch('/api/resumes?responsible_person=System Admin',{headers:{Authorization:'Bearer '+localStorage.getItem('token')}}).then(r=>r.json())]).then(([a,b])=>JSON.stringify({无筛选:a.length,Admin:b.length}))"},"session":"debug"}
