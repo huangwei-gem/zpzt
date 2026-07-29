@@ -4,7 +4,7 @@ import {
   Typography, Popconfirm, Tooltip, Select
 } from 'antd';
 import {
-  PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, SearchOutlined, UserOutlined
+  PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, SearchOutlined, UserOutlined, SyncOutlined
 } from '@ant-design/icons';
 import request from '../../utils/request';
 
@@ -23,6 +23,7 @@ interface Contact {
 const FeishuContacts: React.FC = () => {
   const [data, setData] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editing, setEditing] = useState<Contact | null>(null);
   const [form] = Form.useForm();
@@ -43,6 +44,19 @@ const FeishuContacts: React.FC = () => {
   };
 
   useEffect(() => { fetchData(searchText); }, []);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const res = await request.post('/feishu/sync-contacts');
+      message.success(res?.message || '同步成功');
+      fetchData(searchText);
+    } catch {
+      message.error('同步失败');
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const handleSearch = () => {
     fetchData(searchText);
@@ -181,6 +195,9 @@ const FeishuContacts: React.FC = () => {
               style={{ width: 240 }}
             />
             <Button icon={<ReloadOutlined />} onClick={() => fetchData(searchText)}>刷新</Button>
+            <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={handleSync}>
+              从飞书同步
+            </Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
               添加联系人
             </Button>

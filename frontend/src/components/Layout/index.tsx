@@ -169,7 +169,8 @@ const AppLayout: React.FC = () => {
           left: 0,
           top: 0,
           bottom: 0,
-          zIndex: 100
+          zIndex: 100,
+          overflow: 'hidden'
         }}
       >
         <div style={{ 
