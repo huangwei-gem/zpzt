@@ -5889,12 +5889,18 @@ app.post('/api/cron/interview-reminder', async (c) => {
 /**
  * 构建面试官通知卡片 — 提醒面试官审阅新候选人
  * 使用飞书卡片新版 column 嵌套写法，分栏信息块 + 操作按钮
+ * @param interviewId 面试ID（可选），有则生成跳转到面试详情的链接
  */
-function buildInterviewerCard(name: string, position: string, city: string, analysis: string, operatorName?: string): any {
+function buildInterviewerCard(name: string, position: string, city: string, analysis: string, operatorName?: string, interviewId?: string): any {
   const summary = (analysis || '').trim();
   const nowStr = new Date().toLocaleString('zh-CN', { hour12: false });
   const posLabel = position || '待确认岗位';
   const cityLabel = city || '未填写';
+  // 有面试ID则跳转面试详情；无则跳转面试列表
+  const resumeUrl = interviewId
+    ? `https://ai-interview-22u.pages.dev/interviews/${interviewId}`
+    : 'https://ai-interview-22u.pages.dev/interviews';
+  const interviewListUrl = 'https://ai-interview-22u.pages.dev/interviews';
 
   const elements: any[] = [];
 
@@ -5955,13 +5961,13 @@ function buildInterviewerCard(name: string, position: string, city: string, anal
         tag: 'button',
         text: { tag: 'plain_text', content: '🔍 查看候选人简历' },
         type: 'primary',
-        url: 'https://ai-interview-22u.pages.dev/interviews'
+        url: resumeUrl
       },
       {
         tag: 'button',
         text: { tag: 'plain_text', content: '📋 进入面试管理' },
         type: 'default',
-        url: 'https://ai-interview-22u.pages.dev/talent-pool'
+        url: interviewListUrl
       }
     ]
   });
@@ -6555,7 +6561,8 @@ app.post('/api/interviews/:id/notify-interviewer', authMiddleware, async (c) => 
       body.position_applied || '',
       body.city || '',
       '',
-      currentUser?.full_name
+      currentUser?.full_name,
+      id // 面试ID，用于生成跳转详情链接
     );
 
     const sendOnce = async (openId: string) => {
