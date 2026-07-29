@@ -168,7 +168,7 @@ const InterviewResultPage: React.FC = () => {
   };
 
   const calculateAverage = () => {
-    if (!interview.scores) return '0.0';
+    if (!interview?.scores) return '0.0';
     const values = Object.values(interview.scores) as number[];
     if (values.length === 0) return '0.0';
     const sum = values.reduce((a, b) => a + b, 0);
@@ -357,7 +357,7 @@ const InterviewResultPage: React.FC = () => {
       <Title level={4}>得分详情</Title>
       <List
         bordered
-        dataSource={interview.questions}
+        dataSource={interview.questions || []}
         renderItem={(item: any, index: number) => (
           <List.Item>
             <div style={{ width: '100%' }}>
