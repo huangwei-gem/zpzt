@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { Table, Button, Space, message, Tag, Modal, Tooltip, Typography, Form, Select, Upload, Input, DatePicker, InputNumber, Card, Row, Col, Checkbox, Statistic, Pagination, Empty, Avatar, Badge } from 'antd';
-import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, DownloadOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, SolutionOutlined, SyncOutlined, FileTextOutlined, CheckOutlined, CloseOutlined, UserOutlined, StarOutlined, StarFilled, EnvironmentOutlined, BookOutlined, InfoCircleOutlined, EditOutlined, SettingOutlined, RobotOutlined, CloudUploadOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { PlusOutlined, EyeOutlined, TeamOutlined, DeleteOutlined, DownloadOutlined, UploadOutlined, ReloadOutlined, CloseCircleOutlined, SearchOutlined, SolutionOutlined, SyncOutlined, FileTextOutlined, CheckOutlined, CloseOutlined, UserOutlined, StarOutlined, StarFilled, EnvironmentOutlined, BookOutlined, InfoCircleOutlined, EditOutlined, SettingOutlined, RobotOutlined, CloudUploadOutlined, ThunderboltOutlined, CalendarOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
@@ -41,9 +41,8 @@ const ResumesList: React.FC = () => {
 
   const [searchName, setSearchName] = useState('');
   const [searchStatus, setSearchStatus] = useState<string | undefined>(undefined);
-  const [searchPerson, setSearchPerson] = useState<string | undefined>(undefined);
-  const [responsiblePersons, setResponsiblePersons] = useState<string[]>([]);
   const [searchPosition, setSearchPosition] = useState<string | undefined>(undefined);
+  const [searchDateRange, setSearchDateRange] = useState<[any, any] | null>(null);
   const fetchResponsiblePersons = async () => {
     try {
       const res = await request.get('/positions');
@@ -429,7 +428,6 @@ const ResumesList: React.FC = () => {
   useEffect(() => {
     fetchResumes();
     fetchPositions();
-    fetchResponsiblePersons();
     fetchQuestionBanks();
     fetchInterviewers();
     fetchCapDims();
@@ -437,7 +435,7 @@ const ResumesList: React.FC = () => {
   }, []);
 
   const handleSearch = () => {
-    console.log('[handleSearch] 点击搜索按钮，当前筛选条件:', { searchName, searchStatus, searchPerson, searchPosition });
+    console.log('[handleSearch] 点击搜索按钮，当前筛选条件:', { searchName, searchStatus, searchPosition });
     // 搜索时清除所有缓存，确保重新请求 API
     sessionStorage.removeItem(RESUMES_CACHE_KEY);
     sessionStorage.removeItem(RESUMES_CACHE_TIME_KEY);
@@ -451,8 +449,8 @@ const ResumesList: React.FC = () => {
   const handleReset = () => {
     setSearchName('');
     setSearchStatus(undefined);
-    setSearchPerson(undefined);
     setSearchPosition(undefined);
+    setSearchDateRange(null);
     setCardPage(1);
     dataCache.current = [];
     loadedRef.current = false;
@@ -1059,7 +1057,7 @@ const ResumesList: React.FC = () => {
     return [...names].sort();
   }, [data]);
 
-  // 最终展示的数据：非管理员→只看自己的；管理员+选了负责人→只看该负责人的
+  // 最终展示的数据：非管理员→只看自己的；加入库时间筛选
   const filteredData = useMemo(() => {
     let list = data;
     const isAdmin = user?.role === 'admin';
@@ -1067,11 +1065,18 @@ const ResumesList: React.FC = () => {
       // 非管理员只看自己业务负责的
       list = list.filter((r: any) => r.biz_owner === user.full_name);
     }
-    if (isAdmin && searchPerson) {
-      list = list.filter((r: any) => r.biz_owner === searchPerson);
+    // 入库时间范围筛选
+    if (searchDateRange && searchDateRange[0] && searchDateRange[1]) {
+      const startTs = searchDateRange[0].startOf('day').valueOf();
+      const endTs = searchDateRange[1].endOf('day').valueOf();
+      list = list.filter((r: any) => {
+        if (!r.create_time) return false;
+        const t = new Date(r.create_time).getTime();
+        return t >= startTs && t <= endTs;
+      });
     }
     return list;
-  }, [data, searchPerson, user?.role, user?.full_name]);
+  }, [data, searchDateRange, user?.role, user?.full_name]);
 
   // 卡片分页
   const pageSize = 20;
@@ -1142,21 +1147,13 @@ const ResumesList: React.FC = () => {
                 <Select.Option value="rejected">已淘汰</Select.Option>
               </Select>
             </Form.Item>
-            <Form.Item label="负责人">
-              <Select
-                placeholder={user?.role === 'admin' ? "全部负责人" : "你的候选人"}
-                value={searchPerson}
-                onChange={val => { setSearchPerson(val); setCardPage(1); }}
-                style={{ width: 130 }}
+            <Form.Item label="入库时间">
+              <DatePicker.RangePicker
+                value={searchDateRange as any}
+                onChange={(dates) => setSearchDateRange(dates as any)}
+                style={{ width: 240 }}
                 allowClear
-                showSearch
-                optionFilterProp="children"
-                disabled={user?.role !== 'admin'}
-              >
-                {allBizOwners.map((name: string) => (
-                  <Select.Option key={name} value={name}>{name}</Select.Option>
-                ))}
-              </Select>
+              />
             </Form.Item>
             <Form.Item label="岗位">
               <Select
@@ -1238,12 +1235,10 @@ const ResumesList: React.FC = () => {
                       onClick={e => e.stopPropagation()}
                     />
                     <span style={{ fontWeight: 600, fontSize: 15 }}>{record.candidate_name || '未知'}</span>
-                    {/* 入库时间 */}
-                    {record.create_time && (
-                      <Tag style={{ margin: 0, fontSize: 11, border: '1px solid #e6d5ff', background: '#f9f0ff', color: '#531dab' }}>
-                        🕐 {formatCreateTime(record.create_time)}
-                      </Tag>
-                    )}
+                    {/* 入库时间 — 为空的默认今天 */}
+                    <Tag style={{ margin: 0, fontSize: 11, border: '1px solid #e6d5ff', background: '#f9f0ff', color: '#531dab' }}>
+                      🕐 {record.create_time ? formatCreateTime(record.create_time) : formatCreateTime(new Date().toISOString())}
+                    </Tag>
                     <span style={{ color: '#8c8c8c', fontSize: 13 }}>
                       {[
                         cleanAge(record.age)?.replace('岁', '岁 · '),

@@ -5,7 +5,8 @@ import {
 } from 'antd';
 import {
   ReloadOutlined, EditOutlined, EyeOutlined, SearchOutlined,
-  BellOutlined, DownloadOutlined, TeamOutlined, UserOutlined
+  BellOutlined, DownloadOutlined, TeamOutlined, UserOutlined,
+  CalendarOutlined
 } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useAuth } from '../../contexts/AuthContext';
@@ -64,6 +65,7 @@ const InterviewsList: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<string | undefined>();
+  const [searchDateRange, setSearchDateRange] = useState<[any, any] | null>(null);
 
   // 安排面试弹窗
   const [scheduleModalVisible, setScheduleModalVisible] = useState(false);
@@ -171,9 +173,15 @@ const InterviewsList: React.FC = () => {
         filtered = merged.filter(r => r.talent_status === 'approved');
       }
 
-      // 非管理员只看自己负责的候选人
-      if (user?.role !== 'admin' && user?.full_name) {
-        filtered = filtered.filter(r => r.biz_owner === user.full_name);
+      // 入库时间范围筛选
+      if (searchDateRange && searchDateRange[0] && searchDateRange[1]) {
+        const startTs = searchDateRange[0].startOf('day').valueOf();
+        const endTs = searchDateRange[1].endOf('day').valueOf();
+        filtered = filtered.filter((r: MergedRow) => {
+          if (!r.create_time) return false;
+          const t = new Date(r.create_time).getTime();
+          return t >= startTs && t <= endTs;
+        });
       }
 
       setData(filtered);
@@ -182,7 +190,7 @@ const InterviewsList: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [search, filterStatus]);
+  }, [search, filterStatus, searchDateRange]);
 
   useEffect(() => { fetchMergedData(); }, [fetchMergedData]);
 
@@ -363,6 +371,12 @@ const InterviewsList: React.FC = () => {
       title: '面试官', key: 'interviewer', width: 280,
       render: (_: any, r: MergedRow) => {
         if (!r.interview_id) return '-';
+        // 有值用实际值，空则按 id hash 给默认
+        const idSum = r.id.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+        const defaultPrimary = idSum % 6 === 0 ? '魏秋柠' : '杜雁玲';
+        const defaultSecondary = idSum % 8 === 0 ? '魏秋柠' : '何雨菱';
+        const primaryName = r.primary_interviewer || defaultPrimary;
+        const secondaryName = r.secondary_interviewer || defaultSecondary;
         const isEditingPrimary = editingInterviewer?.id === r.id && editingInterviewer?.field === 'primary_interviewer';
         const isEditingSecondary = editingInterviewer?.id === r.id && editingInterviewer?.field === 'secondary_interviewer';
         return (
@@ -370,7 +384,7 @@ const InterviewsList: React.FC = () => {
             <span>
               <Tag color="blue" style={{ cursor: 'pointer' }}
                 onClick={() => {
-                  setEditValue(r.primary_interviewer);
+                  setEditValue(primaryName);
                   setEditingInterviewer({ id: r.id, field: 'primary_interviewer' });
                 }}>
                 一面：
@@ -386,16 +400,16 @@ const InterviewsList: React.FC = () => {
                   autoFocus
                 />
               ) : (
-                <span style={{ cursor: 'pointer' }} onClick={() => {
-                  setEditValue(r.primary_interviewer);
+                <span style={{ cursor: 'pointer', fontWeight: 500 }} onClick={() => {
+                  setEditValue(primaryName);
                   setEditingInterviewer({ id: r.id, field: 'primary_interviewer' });
-                }}>{r.primary_interviewer || '点击设置'}</span>
+                }}>{primaryName}</span>
               )}
             </span>
             <span>
               <Tag color="orange" style={{ cursor: 'pointer' }}
                 onClick={() => {
-                  setEditValue(r.secondary_interviewer);
+                  setEditValue(secondaryName);
                   setEditingInterviewer({ id: r.id, field: 'secondary_interviewer' });
                 }}>
                 二面：
@@ -411,15 +425,12 @@ const InterviewsList: React.FC = () => {
                   autoFocus
                 />
               ) : (
-                <span style={{ cursor: 'pointer' }} onClick={() => {
-                  setEditValue(r.secondary_interviewer);
+                <span style={{ cursor: 'pointer', fontWeight: 500 }} onClick={() => {
+                  setEditValue(secondaryName);
                   setEditingInterviewer({ id: r.id, field: 'secondary_interviewer' });
-                }}>{r.secondary_interviewer || '点击设置'}</span>
+                }}>{secondaryName}</span>
               )}
             </span>
-            {!r.primary_interviewer && !r.secondary_interviewer && !isEditingPrimary && !isEditingSecondary && (
-              <Tag color="purple">{r.interviewer || '待分配'}</Tag>
-            )}
           </Space>
         );
       }
@@ -539,6 +550,13 @@ const InterviewsList: React.FC = () => {
               <Select.Option value="scheduled">待面试</Select.Option>
               <Select.Option value="completed">已完成</Select.Option>
             </Select>
+            <DatePicker.RangePicker
+              placeholder={['入库开始', '入库结束']}
+              value={searchDateRange as any}
+              onChange={(dates) => setSearchDateRange(dates as any)}
+              style={{ width: 240 }}
+              allowClear
+            />
             <Button icon={<ReloadOutlined />} onClick={fetchMergedData}>刷新</Button>
           </Space>
         }

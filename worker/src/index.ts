@@ -2888,7 +2888,7 @@ app.post('/api/resumes/import-from-feishu', authMiddleware, async (c) => {
           ).bind(
             resumeId, candidateName,
             getFirstValue(f['SourceID']) || '',
-            mapHrReviewToStatus(hrResult || ''),
+            'pending_screening', // 从飞书导入的简历默认都是不入库，等待人工操作入库
             aiEval, hrResult,
             advantage + '\n' + risk,
             ts,
@@ -3350,7 +3350,7 @@ app.post('/api/resumes/:id/override-rejection', authMiddleware, async (c) => {
   return c.json(transformRow(row));
 });
 
-// 简历管理页面：入库 → 创建人才库记录 + 写入飞书多维表格
+// 简历管理页面：入库 → 更新飞书多维表格 + 同步 D1（面试流水线数据源）
 app.post('/api/resumes/:id/approve-to-talent-pool', authMiddleware, async (c) => {
   const id = c.req.param('id');
   const talentTableId = getBitableTableId(c.env, 'talent');
@@ -3358,6 +3358,41 @@ app.post('/api/resumes/:id/approve-to-talent-pool', authMiddleware, async (c) =>
   if (!record) return c.json({ detail: 'Candidate not found in Bitable' }, 404);
 
   await bitableUpdateRecord(c.env, talentTableId, id, { 'HR复核结果': '通过' });
+
+  // 同步更新 D1，使面试流水线能查到
+  const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  try {
+    const existingResume = await c.env.DB.prepare('SELECT * FROM resumes WHERE id = ?').bind(id).first();
+    if (existingResume) {
+      await c.env.DB.prepare("UPDATE resumes SET status = 'approved', created_at = ? WHERE id = ?").bind(now, id).run();
+    } else {
+      // D1 中无对应记录则插入一条（用飞书字段）
+      const f = record.fields || {};
+      const candidateName = getFirstValue(f['姓名']) || '未知';
+      const positionApplied = getFirstValue(f['面试岗位'] || f['招聘岗位']) || '未知';
+      const education = getFirstValue(f['学历']) || '';
+      const city = getFirstValue(f['城市']) || '';
+      const aiEval = getFirstValue(f['AI简历评估']) || '';
+      const hrResult = getFirstValue(f['HR复核结果']) || '';
+      const advantage = getFirstValue(f['优势分析']) || '';
+      const risk = getFirstValue(f['风险点']) || '';
+      const mappedPosition = getFirstValue(f['招聘岗位匹配']) || positionApplied;
+      const bizOwner = getFirstValue(f['业务负责人']) || '待分配';
+      const parsedData = {
+        position_applied: positionApplied, mapped_position: mappedPosition,
+        education, city, advantage, risk, biz_owner: bizOwner,
+        screening_result: '已入库', hr_review: hrResult,
+      };
+      await c.env.DB.prepare(
+        `INSERT INTO resumes (id, candidate_name, status, hr_review, raw_text, created_at, parsed_data)
+         VALUES (?, ?, 'approved', ?, ?, ?, ?)`
+      ).bind(id, candidateName, hrResult, advantage + '\n' + risk, now, JSON.stringify(parsedData)).run();
+    }
+  } catch (e: any) {
+    console.error(`[ApproveToTalentPool] D1 同步失败: ${e.message}`);
+    // 不影响飞书侧操作结果
+  }
+
   record = await bitableGetRecord(c.env, talentTableId, id);
   return c.json(parseTalentRecord(record));
 });
@@ -3371,6 +3406,60 @@ app.post('/api/resumes/:id/reject-from-screening', authMiddleware, async (c) => 
   await bitableUpdateRecord(c.env, talentTableId, id, { 'HR复核结果': '未通过' });
   record = await bitableGetRecord(c.env, talentTableId, id);
   return c.json(parseTalentRecord(record));
+});
+
+// 一次性修复：将飞书中已入库的 HR复核结果=通过 记录同步到 D1（面试流水线数据源）
+app.post('/api/resumes/sync-approved-to-d1', authMiddleware, async (c) => {
+  try {
+    const tableId = getBitableTableId(c.env, 'talent');
+    const records = await bitableListRecords(c.env, tableId);
+    let synced = 0, skipped = 0, failed = 0;
+
+    for (const rec of records) {
+      const rid = rec.record_id;
+      const f = rec.fields || {};
+      const hrResult = getFirstValue(f['HR复核结果']) || '';
+      if (hrResult !== '通过') { skipped++; continue; }
+
+      try {
+        // 用户说：已入库的全部默认今天的时间
+        const ts = now();
+        const candidateName = getFirstValue(f['姓名']) || '未知';
+        const positionApplied = getFirstValue(f['面试岗位'] || f['招聘岗位']) || '未知';
+        const education = getFirstValue(f['学历']) || '';
+        const city = getFirstValue(f['城市']) || '';
+        const aiEval = getFirstValue(f['AI简历评估']) || '';
+        const hrVal = getFirstValue(f['HR复核结果']) || '';
+        const advantage = getFirstValue(f['优势分析']) || '';
+        const risk = getFirstValue(f['风险点']) || '';
+        const mappedPosition = getFirstValue(f['招聘岗位匹配']) || positionApplied;
+        const bizOwner = getFirstValue(f['业务负责人']) || '待分配';
+        const parsedData = {
+          position_applied: positionApplied, mapped_position: mappedPosition,
+          education, city, advantage, risk, biz_owner: bizOwner,
+          screening_result: '已入库', hr_review: hrVal,
+        };
+
+        const existing = await c.env.DB.prepare('SELECT id FROM resumes WHERE id = ?').bind(rid).first();
+        if (existing) {
+          await c.env.DB.prepare("UPDATE resumes SET status = 'approved', hr_review = ?, created_at = ? WHERE id = ?").bind(hrVal, ts, rid).run();
+        } else {
+          await c.env.DB.prepare(
+            `INSERT INTO resumes (id, candidate_name, status, hr_review, raw_text, created_at, parsed_data)
+             VALUES (?, ?, 'approved', ?, ?, ?, ?)`
+          ).bind(rid, candidateName, hrVal, advantage + '\n' + risk, ts, JSON.stringify(parsedData)).run();
+        }
+        synced++;
+      } catch (e: any) {
+        failed++;
+        console.error(`[SyncApproved] ${getFirstValue(f['姓名'])}: ${e.message}`);
+      }
+    }
+
+    return c.json({ total: records.length, synced, skipped, failed });
+  } catch (e: any) {
+    return c.json({ detail: '同步失败: ' + e.message }, 500);
+  }
 });
 
 // 重置简历到待初筛状态（清除 HR复核结果）
@@ -7134,6 +7223,7 @@ export default {
       "ALTER TABLE positions ADD COLUMN secondary_interviewer TEXT DEFAULT ''",
       "ALTER TABLE interviews ADD COLUMN primary_interviewer TEXT DEFAULT ''",
       "ALTER TABLE interviews ADD COLUMN secondary_interviewer TEXT DEFAULT ''",
+      "ALTER TABLE interviews ADD COLUMN updated_at TEXT DEFAULT ''",
       "ALTER TABLE positions ADD COLUMN responsible_person TEXT DEFAULT ''",
       "ALTER TABLE positions ADD COLUMN personalized_requirements TEXT DEFAULT ''",
       "ALTER TABLE positions ADD COLUMN capability_dimensions TEXT DEFAULT '[]'",

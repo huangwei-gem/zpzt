@@ -1,0 +1,11 @@
+const fs = require('fs');
+const s = fs.readFileSync(0, 'utf8');
+const m = s.match(/"url":"([^"]+)"/);
+console.log('URL:', m ? m[1] : '?');
+const has404 = s.includes('404');
+console.log('是否404:', has404 ? '❌ YES' : '✅ NO');
+const hasInterviews = s.includes('候选人') || s.includes('面试') || s.includes('candidate');
+console.log('有面试数据:', hasInterviews ? '✅ YES' : '❌ NO');
+const hasTable = s.includes('table') || s.includes('rowgroup');
+console.log('有表格行:', hasTable ? '✅ YES' : '❌ NO');
+console.log('页面长度:', s.length, 'chars');
