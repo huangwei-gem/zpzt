@@ -291,8 +291,11 @@ const ResumesList: React.FC = () => {
       if (searchName) params.candidate_name = searchName;
       if (searchStatus) params.status = searchStatus;
 
+      // 全局负责人筛选（axios 拦截器也会带上），筛选时必须跳过缓存
+      const globalPerson = sessionStorage.getItem('responsible_person');
+
       // 没有任何筛选条件时尝试缓存（有任一筛选条件则跳过缓存）
-      if (!searchName && !searchStatus && !searchPosition) {
+      if (!searchName && !searchStatus && !searchPosition && !globalPerson) {
         const cachedTime = sessionStorage.getItem(RESUMES_CACHE_TIME_KEY);
         const now = Date.now();
         if (cachedTime && (now - parseInt(cachedTime)) < CACHE_TTL) {

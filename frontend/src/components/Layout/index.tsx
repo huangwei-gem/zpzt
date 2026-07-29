@@ -253,6 +253,9 @@ const AppLayout: React.FC = () => {
               value={selectedPerson || undefined}
               onChange={(val) => {
                 setSelectedPerson(val || '');
+                // 清掉简历管理的 sessionStorage 缓存，确保切换负责人后重新拉数据
+                sessionStorage.removeItem('_cached_resumes_data');
+                sessionStorage.removeItem('_cached_resumes_time');
                 // 强制刷新当前页面数据（axios 拦截器会自动带上 responsible_person）
                 setTimeout(() => window.location.reload(), 100);
               }}
