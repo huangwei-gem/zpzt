@@ -4621,44 +4621,54 @@ app.post('/api/daily-reports/:id/send', authMiddleware, async (c) => {
     if (!row) return c.json({ detail: '日报不存在' }, 404);
 
     const r: any = transformRow(row);
-    const stats = r.content ? (() => { try { return JSON.parse(r.content); } catch { return {}; } })() : {};
+    const reportData = r.content ? (() => { try { return JSON.parse(r.content); } catch { return {}; } })() : {};
     const aiSummary = r.stats || '(无AI摘要)';
 
-    const cardContent = {
-      config: { wide_screen_mode: true },
-      header: {
-        title: { tag: 'plain_text', content: `📊 ${r.title || '招聘日报'}` },
-        template: 'blue',
-      },
-      elements: [
-        {
-          tag: 'div',
-          text: {
-            tag: 'lark_md',
-            content: [
-              `**报告日期**：${r.report_date || '-'}`,
-              `**待筛选**：${stats.pending_screening ?? '-'}`,
-              `**面试中**：${stats.active_interviews ?? '-'}`,
-              `**已通过**：${stats.approved_candidates ?? '-'}`,
-              `**入职中**：${stats.onboarding_count ?? '-'}`,
-              `**开放需求**：${stats.open_requisitions ?? '-'}`,
-              '',
-              `**📝 AI 摘要**`,
-              aiSummary.length > 500 ? aiSummary.slice(0, 500) + '...' : aiSummary,
-            ].join('\n'),
+    // 如果存储的数据中包含 owners（新格式），使用表格卡片
+    let cardContent: any;
+    if (reportData.owners && Array.isArray(reportData.owners)) {
+      cardContent = buildDailyReportCard(
+        r.report_date || reportData.date || '未知日期',
+        reportData.owners,
+        reportData.total || { grandTotal: 0, grandPending: 0, grandApproved: 0, grandRejected: 0 },
+        aiSummary
+      );
+      // 替换 header 标题为原标题
+      cardContent.header.title.content = `📊 ${r.title || '招聘日报'}`;
+    } else {
+      // 旧格式：降级为不错的 markdown 布局
+      cardContent = {
+        config: { wide_screen_mode: true },
+        header: {
+          title: { tag: 'plain_text', content: `📊 ${r.title || '招聘日报'}` },
+          template: 'blue',
+        },
+        elements: [
+          {
+            tag: 'div',
+            text: {
+              tag: 'lark_md',
+              content: [
+                `**报告日期**：${r.report_date || '-'}`,
+                `**待筛选**：${reportData.pending_screening ?? '-'}`,
+                `**面试中**：${reportData.active_interviews ?? '-'}`,
+                `**已通过**：${reportData.approved_candidates ?? '-'}`,
+                `**入职中**：${reportData.onboarding_count ?? '-'}`,
+                `**开放需求**：${reportData.open_requisitions ?? '-'}`,
+                '',
+                `**📝 AI 摘要**`,
+                aiSummary.length > 500 ? aiSummary.slice(0, 500) + '...' : aiSummary,
+              ].join('\n'),
+            },
           },
-        },
-        {
-          tag: 'hr',
-        },
-        {
-          tag: 'note',
-          elements: [
-            { tag: 'plain_text', content: `AI 智能招聘系统 · ${new Date().toLocaleString('zh-CN')}` },
-          ],
-        },
-      ],
-    };
+          { tag: 'hr' },
+          {
+            tag: 'note',
+            elements: [{ tag: 'plain_text', content: `AI 智能招聘系统 · ${new Date().toLocaleString('zh-CN')}` }],
+          },
+        ],
+      };
+    }
 
     // 用当前用户的 feishu_token 以用户身份发送，而不是用 bot token
     const currentUser = c.get('user');
@@ -5739,106 +5749,42 @@ app.post('/api/cron/daily-report', async (c) => {
         总计: `总${grandTotal}人(待处理${grandPending}, 已入库${grandApproved}, 淘汰${grandRejected})`
       };
       aiSummary = await callAI(c.env,
-        '你是招聘数据分析专家。根据按负责人分组的招聘统计数据生成一份简洁的日报摘要（中文），包含：整体进展概述、各负责人表现对比、关键指标分析、风险提示、明日建议。控制在200字以内。直接输出纯文字，不要markdown格式。',
+        '你是招聘数据分析专家。根据按负责人分组的招聘统计数据生成一份简洁的日报摘要（中文，50~80字），包含整体进展概述和需要注意的关键点。直接输出纯文字，不要markdown。',
         `日期：${dateStr}\n统计：${JSON.stringify(statsForAi, null, 2)}`
       );
     } catch {}
 
-    // 4. 构造飞书卡片
-    const elements: any[] = [];
-
-    // 4a. 总计行 - 用表格展示
-    elements.push({
-      tag: 'div',
-      text: {
-        tag: 'lark_md',
-        content: `📅 **日期：${dateStr}**`
-      }
-    });
-
-    // 4b. 按负责人分行显示 - 用 table 结构
-    // 表头行
-    const headerCells = [
-      { tag: 'markdown', content: '**负责人**', width: '90px', column_span: 1 },
-      { tag: 'markdown', content: '**总简历**', width: '80px', column_span: 1 },
-      { tag: 'markdown', content: '**待处理**', width: '80px', column_span: 1 },
-      { tag: 'markdown', content: '**已入库**', width: '80px', column_span: 1 },
-      { tag: 'markdown', content: '**已淘汰**', width: '80px', column_span: 1 },
-    ];
-    const headerRow: any = { tag: 'column_set', flex_mode: 'none', background_style: 'grey', columns: headerCells };
-
-    // 数据行
-    const statRows: any[] = ownerStats.map(s => ({
-      tag: 'column_set', flex_mode: 'none',
-      columns: [
-        { tag: 'markdown', content: s.name, width: '90px', column_span: 1 },
-        { tag: 'markdown', content: `**${s.total}**`, width: '80px', column_span: 1 },
-        { tag: 'markdown', content: s.pending > 0 ? `⚠️ **${s.pending}**` : `${s.pending}`, width: '80px', column_span: 1 },
-        { tag: 'markdown', content: `✅ **${s.approved}**`, width: '80px', column_span: 1 },
-        { tag: 'markdown', content: s.rejected > 0 ? `❌ ${s.rejected}` : `${s.rejected}`, width: '80px', column_span: 1 },
-      ]
-    }));
-
-    // 总计行
-    statRows.push({
-      tag: 'column_set', flex_mode: 'none', background_style: 'grey',
-      columns: [
-        { tag: 'markdown', content: `**合计**`, width: '90px', column_span: 1 },
-        { tag: 'markdown', content: `**${grandTotal}**`, width: '80px', column_span: 1 },
-        { tag: 'markdown', content: grandPending > 0 ? `⚠️ **${grandPending}**` : `**${grandPending}**`, width: '80px', column_span: 1 },
-        { tag: 'markdown', content: `✅ **${grandApproved}**`, width: '80px', column_span: 1 },
-        { tag: 'markdown', content: `❌ **${grandRejected}**`, width: '80px', column_span: 1 },
-      ]
-    });
-
-    elements.push(headerRow, ...statRows);
-
-    // 4c. 分隔线
-    elements.push({ tag: 'hr' });
-
-    // 4d. AI 摘要
-    elements.push({
-      tag: 'div',
-      text: {
-        tag: 'lark_md',
-        content: `🤖 **AI 摘要**\n${aiSummary}`
-      }
-    });
-
-    elements.push({ tag: 'hr' });
-
-    elements.push({
-      tag: 'note',
-      elements: [{ tag: 'plain_text', content: `AI 智能招聘系统 · ${today.toLocaleString('zh-CN')}` }]
-    });
-
-    const cardContent = {
-      config: { wide_screen_mode: true },
-      header: {
-        title: { tag: 'plain_text', content: `📊 招聘日报 ${dateStr}` },
-        template: 'blue'
-      },
-      elements
+    // 4. 构建统计数据（存库用）
+    const reportStats = {
+      date: dateStr,
+      owners: ownerStats,
+      total: { grandTotal, grandPending, grandApproved, grandRejected },
+      ai_summary: aiSummary,
     };
 
-    // 5. 发送到招聘群
+    // 5. 存库（记录日报）
+    const title = `招聘日报 - ${dateStr}`;
+    const reportId = uuid();
+    await c.env.DB.prepare(
+      'INSERT INTO daily_reports (id, report_date, report_type, title, content, stats, status, created_at) VALUES (?,?,?,?,?,?,?,?)'
+    ).bind(reportId, dateStr, 'progress', title, JSON.stringify(reportStats), aiSummary, 'generated', now()).run();
+
+    // 6. 发送到招聘群（如果有 chatId）
     const chatId = FEISHU_CONFIG.recruitmentGroupChatId;
     if (chatId) {
       const token = await getFeishuToken(c.env);
+      const cardContent = buildDailyReportCard(dateStr, ownerStats, { grandTotal, grandPending, grandApproved, grandRejected }, aiSummary);
       await sendFeishuMessageToChat(token, chatId, cardContent);
     }
 
     return c.json({
       ok: true,
       data: {
+        id: reportId,
         date: dateStr,
         owners: ownerStats,
         total: { grandTotal, grandPending, grandApproved, grandRejected },
         aiSummary,
-        _debug: (debugRows || []).map((r: any) => ({
-          name: r.candidate_name,
-          bizOwnerInRaw: r.pd ? r.pd.substring(0, 200) : 'null'
-        }))
       }
     });
   } catch (err: any) {
@@ -5915,6 +5861,83 @@ function buildInterviewerCard(name: string, position: string, city: string, anal
         elements: [{ tag: 'plain_text', content: `${operatorName || '系统'} 推荐 | AI 智能面试系统` }]
       }
     ]
+  };
+}
+
+/**
+ * 构建招聘日报飞书卡片（表格格式）
+ */
+function buildDailyReportCard(
+  dateStr: string,
+  ownerStats: { name: string; total: number; pending: number; approved: number; rejected: number }[],
+  totals: { grandTotal: number; grandPending: number; grandApproved: number; grandRejected: number },
+  aiSummary: string
+): any {
+  const elements: any[] = [];
+
+  // 日期标题
+  elements.push({
+    tag: 'div',
+    text: { tag: 'lark_md', content: `📅 **招聘日报 · ${dateStr}**` }
+  });
+
+  // 表头
+  elements.push({
+    tag: 'column_set', flex_mode: 'none', background_style: 'grey',
+    columns: [
+      { tag: 'markdown', content: '**负责人**', width: '90px' },
+      { tag: 'markdown', content: '**总简历**', width: '70px' },
+      { tag: 'markdown', content: '**待处理**', width: '70px' },
+      { tag: 'markdown', content: '**已入库**', width: '70px' },
+      { tag: 'markdown', content: '**淘汰**', width: '60px' },
+    ]
+  });
+
+  // 数据行
+  for (const s of ownerStats) {
+    elements.push({
+      tag: 'column_set', flex_mode: 'none',
+      columns: [
+        { tag: 'markdown', content: s.name, width: '90px' },
+        { tag: 'markdown', content: `**${s.total}**`, width: '70px' },
+        { tag: 'markdown', content: s.pending > 0 ? `⚠️ **${s.pending}**` : `${s.pending}`, width: '70px' },
+        { tag: 'markdown', content: `✅ **${s.approved}**`, width: '70px' },
+        { tag: 'markdown', content: s.rejected > 0 ? `❌ ${s.rejected}` : `${s.rejected}`, width: '60px' },
+      ]
+    });
+  }
+
+  // 合计行
+  elements.push({
+    tag: 'column_set', flex_mode: 'none', background_style: 'grey',
+    columns: [
+      { tag: 'markdown', content: '**合计**', width: '90px' },
+      { tag: 'markdown', content: `**${totals.grandTotal}**`, width: '70px' },
+      { tag: 'markdown', content: totals.grandPending > 0 ? `⚠️ **${totals.grandPending}**` : `**${totals.grandPending}**`, width: '70px' },
+      { tag: 'markdown', content: `✅ **${totals.grandApproved}**`, width: '70px' },
+      { tag: 'markdown', content: totals.grandRejected > 0 ? `❌ **${totals.grandRejected}**` : `**${totals.grandRejected}**`, width: '60px' },
+    ]
+  });
+
+  // AI 摘要
+  elements.push({ tag: 'hr' });
+  elements.push({
+    tag: 'div',
+    text: { tag: 'lark_md', content: `🤖 **AI 摘要**\n${aiSummary}` }
+  });
+  elements.push({ tag: 'hr' });
+  elements.push({
+    tag: 'note',
+    elements: [{ tag: 'plain_text', content: `AI 智能招聘系统 · ${new Date().toLocaleString('zh-CN')}` }]
+  });
+
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: 'plain_text', content: `📊 招聘日报 ${dateStr}` },
+      template: 'blue'
+    },
+    elements
   };
 }
 
