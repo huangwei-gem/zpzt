@@ -108,12 +108,8 @@ const InterviewsList: React.FC = () => {
     setLoading(true);
     try {
       // 同时拉候选人（从简历管理已入库的）+ 面试记录
-      const params: any = { candidate_name: search || undefined };
-      if (selectedPerson) {
-        params.responsible_person = selectedPerson;
-      }
       const [candidates, interviews] = await Promise.all([
-        request.get('/interviews/pipeline-candidates', { params }).catch(() => []),
+        request.get('/interviews/pipeline-candidates', { params: { candidate_name: search || undefined } }).catch(() => []),
         request.get('/interviews').catch(() => []),
       ]);
 
@@ -188,6 +184,17 @@ const InterviewsList: React.FC = () => {
           const t = new Date(r.create_time).getTime();
           return t >= startTs && t <= endTs;
         });
+      }
+
+      // 负责人筛选（匹配面试官/负责人字段）
+      if (selectedPerson) {
+        const person = selectedPerson.trim();
+        filtered = filtered.filter(r =>
+          r.interviewer === person ||
+          r.primary_interviewer === person ||
+          r.secondary_interviewer === person ||
+          r.biz_owner === person
+        );
       }
 
       setData(filtered);
