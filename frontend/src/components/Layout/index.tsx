@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Layout, Menu, Button, Avatar, Space, Dropdown, theme, Badge } from 'antd';
 import {
   DashboardOutlined,
@@ -19,6 +19,8 @@ import {
   PartitionOutlined,
   MailOutlined,
   ContactsOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
@@ -155,12 +157,16 @@ const AppLayout: React.FC = () => {
     }
   );
 
+  const [collapsed, setCollapsed] = useState(false);
+
   const userMenu = { items: userMenuItems };
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider 
-        collapsible 
+        collapsible
+        trigger={null}
+        collapsed={collapsed}
         width={240}
         theme="light"
         style={{
@@ -170,7 +176,9 @@ const AppLayout: React.FC = () => {
           top: 0,
           bottom: 0,
           zIndex: 100,
-          overflowY: 'auto'
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column'
         }}
       >
         <div style={{ 
@@ -183,21 +191,46 @@ const AppLayout: React.FC = () => {
           fontSize: '20px',
           fontWeight: 700,
           letterSpacing: '-0.025em',
-          borderBottom: '1px solid #f0f0f0'
+          borderBottom: '1px solid #f0f0f0',
+          flexShrink: 0
         }}>
           <img src="/swan.svg" alt="天鹅到家" style={{ width: 28, height: 28 }} />
-          <span style={{ color: '#E1251B' }}>天鹅到家</span>
+          {!collapsed && <span style={{ color: '#E1251B' }}>天鹅到家</span>}
         </div>
         <Menu
           theme="light"
           mode="inline"
+          inlineCollapsed={collapsed}
           selectedKeys={[location.pathname]}
           items={filteredMenuItems}
           onClick={({ key }) => navigate(key)}
-          style={{ padding: '16px 8px', borderRight: 0 }}
+          style={{ 
+            padding: '16px 8px', 
+            borderRight: 0,
+            maxHeight: 'calc(100vh - 112px)',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            scrollbarWidth: 'thin'
+          }}
         />
+        <div 
+          onClick={() => setCollapsed(!collapsed)}
+          style={{
+            height: 48,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderTop: '1px solid #f0f0f0',
+            cursor: 'pointer',
+            color: '#64748B',
+            fontSize: 16,
+            flexShrink: 0
+          }}
+        >
+          {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+        </div>
       </Sider>
-      <Layout style={{ marginLeft: 240 }}>
+      <Layout style={{ marginLeft: collapsed ? 80 : 240 }}>
         <Header style={{ 
           padding: '0 32px', 
           display: 'flex', 

@@ -126,9 +126,31 @@ const FeishuContacts: React.FC = () => {
       title: 'Open ID',
       dataIndex: 'open_id',
       key: 'open_id',
-      width: 340,
+      width: 380,
+      ellipsis: true,
       render: (id: string) => (
-        <Text copyable style={{ fontSize: 12, fontFamily: 'monospace' }}>{id}</Text>
+        <Tooltip title={id}>
+          <Text
+            copyable={{ text: id }}
+            style={{
+              fontSize: 13,
+              fontFamily: 'monospace',
+              whiteSpace: 'nowrap',
+              color: '#64748B',
+              background: '#F1F5F9',
+              padding: '2px 8px',
+              borderRadius: 4,
+              display: 'inline-block',
+              maxWidth: 350,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              verticalAlign: 'middle',
+              lineHeight: '24px'
+            }}
+          >
+            {id}
+          </Text>
+        </Tooltip>
       ),
     },
     {
@@ -212,6 +234,12 @@ const FeishuContacts: React.FC = () => {
           pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 个联系人` }}
           locale={{ emptyText: '暂无联系人数据' }}
           size="middle"
+          bordered
+          style={{ borderRadius: 8 }}
+          rowClassName={() => 'contact-row'}
+          onRow={() => ({
+            style: { transition: 'background 0.2s' }
+          })}
         />
 
         <div style={{ marginTop: 16, background: '#f6f8fa', padding: '12px 16px', borderRadius: 8 }}>
