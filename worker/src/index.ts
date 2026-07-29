@@ -6491,8 +6491,13 @@ app.post('/api/interviews/:id/notify-interviewer', authMiddleware, async (c) => 
       return c.json({ detail: '你的飞书授权已失效（refresh_token 过期），请重新在个人设置里绑定飞书账号' }, 400);
     }
 
-    // 2. 查收件人的 open_id：先用 users 表，再走飞书通讯录搜索
+    // 2. 查收件人的 open_id，优先级：
+    //    a. users.feishu_open_id（本应用 OAuth 绑定，最可靠）
+    //    b. feishu_contacts 表（通讯录同步过的本租户 open_id）
+    //    c. 飞书通讯录实时搜索（递归遍历所有部门，不只根部门前3页）
+    //    d. 硬编码映射（最后兜底，已知可能跨应用失效）
     let targetOpenId = '';
+    const triedOpenIds = new Set<string>(); // 记录已尝试过的（含失效）id，便于失败后重查
 
     // 2a. users 表
     try {
@@ -6505,69 +6510,46 @@ app.post('/api/interviews/:id/notify-interviewer', authMiddleware, async (c) => 
       }
     } catch {}
 
-    // 2b. 硬编码映射（open_id 在同一租户内跨应用通用）
+    // 2b. feishu_contacts 表（通讯录同步数据）
     if (!targetOpenId) {
-      const hardcoded = (FEISHU_CONFIG as any).interviewerOpenIds;
-      if (hardcoded && hardcoded[interviewerName]) {
-        targetOpenId = hardcoded[interviewerName];
-        console.log(`[NotifyInterviewer] 硬编码映射找到 ${interviewerName} → ${targetOpenId}`);
-        // 顺便写入 users 表，下次直接用
+      const contactOpenId = await getContactOpenId(c.env, interviewerName);
+      if (contactOpenId) {
+        targetOpenId = contactOpenId;
+        console.log(`[NotifyInterviewer] feishu_contacts 表找到 ${interviewerName} → ${targetOpenId}`);
+      }
+    }
+
+    // 2c. 飞书通讯录实时搜索（递归遍历所有部门，用 tenant_access_token）
+    if (!targetOpenId) {
+      targetOpenId = await searchContactInFeishu(c.env, interviewerName);
+      if (targetOpenId) {
+        console.log(`[NotifyInterviewer] 通讯录实时搜索找到 ${interviewerName} → ${targetOpenId}`);
+        // 同步写入 feishu_contacts 表，下次直接命中 2b
         try {
           await c.env.DB.prepare(
-            "UPDATE users SET feishu_open_id = ? WHERE full_name = ? AND (feishu_open_id IS NULL OR feishu_open_id = '')"
-          ).bind(targetOpenId, interviewerName).run();
+            `INSERT INTO feishu_contacts (name, open_id, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT(open_id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at`
+          ).bind(interviewerName, targetOpenId, now()).run();
         } catch {}
       }
     }
 
-    // 2c. 飞书通讯录搜索（按姓名精确查，用 tenant_access_token）
+    // 2d. 硬编码映射（最后兜底；open_id 可能来自其他应用，存在跨应用失效风险）
     if (!targetOpenId) {
-      const appToken = await getFeishuToken(c.env);
-      try {
-        // 先获取部门列表，找根部门
-        const deptResp = await fetch('https://open.feishu.cn/open-apis/contact/v3/departments?page_size=1', {
-          headers: { Authorization: `Bearer ${appToken}` }
-        });
-        const deptData = await deptResp.json() as any;
-        if (deptData.code === 0 && deptData.data?.items?.length > 0) {
-          const rootDeptId = deptData.data.items[0].open_department_id;
-          // 搜索这个部门下所有用户
-          let pageToken: string | undefined;
-          mainLoop: for (let i = 0; i < 3; i++) {  // 最多翻3页
-            const url = `https://open.feishu.cn/open-apis/contact/v3/users/find_by_department?department_id=${rootDeptId}&page_size=50${pageToken ? `&page_token=${pageToken}` : ''}`;
-            const searchResp = await fetch(url, { headers: { Authorization: `Bearer ${appToken}` } });
-            const searchData = await searchResp.json() as any;
-            if (searchData.code === 0) {
-              const items = searchData.data?.items || [];
-              for (const u of items) {
-                if (u.name === interviewerName) {
-                  targetOpenId = u.open_id;
-                  console.log(`[NotifyInterviewer] 通讯录找到 ${interviewerName} → ${targetOpenId}`);
-                  try {
-                    await c.env.DB.prepare(
-                      "UPDATE users SET feishu_open_id = ? WHERE full_name = ? AND (feishu_open_id IS NULL OR feishu_open_id = '')"
-                    ).bind(targetOpenId, interviewerName).run();
-                  } catch {}
-                  break mainLoop;
-                }
-              }
-              if (!searchData.data?.has_more) break;
-              pageToken = searchData.data?.page_token;
-            } else {
-              break;
-            }
-          }
-        }
-      } catch (e: any) {
-        console.warn(`[NotifyInterviewer] 通讯录搜索失败: ${e.message}`);
+      const hardcoded = (FEISHU_CONFIG as any).interviewerOpenIds;
+      if (hardcoded && hardcoded[interviewerName]) {
+        targetOpenId = hardcoded[interviewerName];
+        console.log(`[NotifyInterviewer] 硬编码映射兜底 ${interviewerName} → ${targetOpenId}（可能跨应用失效）`);
       }
     }
 
     if (!targetOpenId) {
-      return c.json({ detail: `找不到面试官 ${interviewerName} 的飞书 open_id，请确认该姓名在企业通讯录中存在或已绑定飞书` }, 400);
+      return c.json({ detail: `找不到面试官 ${interviewerName} 的飞书 open_id，请让该面试官在「个人设置」绑定飞书，或在「设置>联系人」同步通讯录` }, 400);
     }
 
     // 3. 用「当前用户」的 feishu_token（带 fallback）发私信给面试官
+    //    若发送失败且为「无效 open_id」(99992351)，说明该 id 跨应用失效，
+    //    自动剔除并重新查一个本应用可用的 open_id 重试一次。
     const cardContent = buildInterviewerCard(
       candidateName,
       body.position_applied || '',
@@ -6575,8 +6557,41 @@ app.post('/api/interviews/:id/notify-interviewer', authMiddleware, async (c) => 
       '',
       currentUser?.full_name
     );
+
+    const sendOnce = async (openId: string) => {
+      await sendFeishuMessageWithFallback(c.env, openId, cardContent, myToken, currentUser.email);
+    };
+
     try {
-      await sendFeishuMessageWithFallback(c.env, targetOpenId, cardContent, myToken, currentUser.email);
+      try {
+        await sendOnce(targetOpenId);
+      } catch (err: any) {
+        const msg = String(err?.message || '');
+        // 99992351 = open_id 无效/不存在（典型：跨应用 open_id）
+        if (!msg.includes('99992351')) throw err;
+        console.warn(`[NotifyInterviewer] open_id ${targetOpenId} 无效(99992351)，尝试重查 ${interviewerName} 的有效 id...`);
+
+        // 清掉坏 id：从 users 表和 feishu_contacts 表删除该失效记录
+        triedOpenIds.add(targetOpenId);
+        try {
+          await c.env.DB.prepare('UPDATE users SET feishu_open_id = \'\' WHERE feishu_open_id = ?').bind(targetOpenId).run();
+          await c.env.DB.prepare('DELETE FROM feishu_contacts WHERE open_id = ?').bind(targetOpenId).run();
+        } catch {}
+
+        // 重新查：通讯录实时搜索（已剔除坏 id 后会重新落库）
+        const newOpenId = await searchContactInFeishu(c.env, interviewerName);
+        if (!newOpenId || triedOpenIds.has(newOpenId)) {
+          throw new Error(`${interviewerName} 的飞书 open_id 无效且无法重新获取，请让该面试官在「个人设置」绑定飞书账号`);
+        }
+        console.log(`[NotifyInterviewer] 重查到 ${interviewerName} → ${newOpenId}，重试发送`);
+        try {
+          await c.env.DB.prepare(
+            `INSERT INTO feishu_contacts (name, open_id, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT(open_id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at`
+          ).bind(interviewerName, newOpenId, now()).run();
+        } catch {}
+        await sendOnce(newOpenId);
+      }
       return c.json({ ok: true, message: `${currentUser.full_name || '你'} 已提醒面试官 ${interviewerName}: ${candidateName}` });
     } catch (err: any) {
       throw err;
@@ -7422,6 +7437,59 @@ async function getContactOpenId(env: Env, name: string): Promise<string> {
 
     return '';
   } catch {
+    return '';
+  }
+}
+
+/**
+ * 飞书通讯录实时搜索：用 tenant_access_token 递归遍历所有部门，
+ * 按姓名精确匹配返回 open_id。比只翻根部门前几页更全。
+ * 受应用「通讯录」权限范围限制；权限不足时返回 ''。
+ */
+async function searchContactInFeishu(env: Env, name: string): Promise<string> {
+  if (!name) return '';
+  try {
+    const token = await getFeishuToken(env);
+
+    // 1. 收集所有部门 ID（根部门 '0' + 子部门，分页拉取）
+    const allDeptIds: string[] = ['0'];
+    let deptPageToken: string | undefined;
+    do {
+      let deptUrl = 'https://open.feishu.cn/open-apis/contact/v3/departments?page_size=50';
+      if (deptPageToken) deptUrl += `&page_token=${deptPageToken}`;
+      const deptResp = await fetch(deptUrl, { headers: { Authorization: `Bearer ${token}` } });
+      const deptData: any = await deptResp.json();
+      if (deptData.code !== 0) break;
+      for (const d of (deptData.data?.items || [])) {
+        allDeptIds.push(d.open_department_id);
+      }
+      deptPageToken = deptData.data?.page_token;
+    } while (deptPageToken);
+
+    // 2. 遍历每个部门下的用户，精确匹配姓名
+    for (const deptId of allDeptIds) {
+      let pageToken: string | undefined;
+      let guard = 0;
+      do {
+        guard++;
+        if (guard > 50) break; // 安全护栏
+        let url = `https://open.feishu.cn/open-apis/contact/v3/users/find_by_department?department_id=${deptId}&page_size=50`;
+        if (pageToken) url += `&page_token=${pageToken}`;
+        const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        const data: any = await resp.json();
+        if (data.code !== 0) break;
+        for (const u of (data.data?.items || [])) {
+          if (u.name === name && u.open_id) {
+            return u.open_id;
+          }
+        }
+        if (!data.data?.has_more) break;
+        pageToken = data.data?.page_token;
+      } while (pageToken);
+    }
+    return '';
+  } catch (e: any) {
+    console.warn(`[searchContactInFeishu] 搜索 ${name} 失败: ${e.message}`);
     return '';
   }
 }
