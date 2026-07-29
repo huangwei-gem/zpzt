@@ -43,6 +43,7 @@ const ResumesList: React.FC = () => {
   const [searchStatus, setSearchStatus] = useState<string | undefined>(undefined);
   const [searchPosition, setSearchPosition] = useState<string | undefined>(undefined);
   const [searchDateRange, setSearchDateRange] = useState<[any, any] | null>(null);
+  const [responsiblePersons, setResponsiblePersons] = useState<string[]>([]);
   const fetchResponsiblePersons = async () => {
     try {
       const res = await request.get('/positions');
