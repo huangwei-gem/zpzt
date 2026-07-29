@@ -15,6 +15,7 @@ interface Env {
   FEISHU_TALENT_TABLE_ID?: string;
   FEISHU_OAUTH_REDIRECT_URI?: string;
   RESUMES_KV?: KVNamespace;
+  MINERU_API_KEY?: string;
 }
 
 // 飞书配置（内置 fallback，页面部署时不用再设环境变量）
@@ -73,6 +74,20 @@ const FEISHU_CONFIG = {
 // 简单内存缓存，减少飞书 Bitable 重复请求
 const BITABLE_CACHE_TTL = 30_000;
 const bitableCache = new Map<string, { data: any[]; expiry: number }>();
+
+// 临时文件存储（用于 MinerU API 提取文本时生成临时下载 URL）
+// 键：UUID → { data: ArrayBuffer, name: string, expiry: number }
+const tempFileStore = new Map<string, { data: ArrayBuffer; name: string; expiry: number }>();
+const TEMP_FILE_TTL = 5 * 60 * 1000; // 5 分钟过期
+// 定期清理过期文件
+if (typeof setInterval !== 'undefined') {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, val] of tempFileStore) {
+      if (val.expiry < now) tempFileStore.delete(key);
+    }
+  }, 60_000);
+}
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors());
@@ -135,81 +150,115 @@ async function verifyJwt(secretKey: string, token: string): Promise<any | null> 
   } catch { return null; }
 }
 
-// ==================== MinerU PDF 文本提取 ====================
-// 使用 MinerU API 从 PDF 中提取高质量文本，替代前端 pdf.js 兜底方案
+// ==================== MinerU PDF 文本提取（v4 API）====================
 const MINERU_BASE_URL = 'https://mineru.net';
-// 用户提供的 MinerU API Key
-const MINERU_API_KEY = 'sk-qWPs7w8gNAgJJnDmKxW2ZFyAhNfMTrBgl1271XCbizmEclJr';
+// MinerU API Key 从环境变量读取，如果未设置则尝试硬编码值（降级兼容）
+function getMineruApiKey(env?: any): string {
+  if (env?.MINERU_API_KEY) return env.MINERU_API_KEY;
+  return ''; // 未配置时跳过 MinerU
+}
 
 /**
  * 使用 MinerU v4 API 提取 PDF 文本
- * 1. 上传 PDF 到临时存储
- * 2. 创建提取任务
- * 3. 轮询直到完成
- * 4. 下载并返回提取的文本内容
+ * 流程：文件保存到内存 → 生成临时 URL → 提交到 MinerU v4 → 轮询结果
+ * @param env Worker 环境变量（用于读取 MINERU_API_KEY）
+ * @param fileBuffer PDF 文件二进制数据
+ * @param fileName 文件名
+ * @param publicFileUrl 文件的公网可访问 URL（Worker 生成的临时路由）
  */
-async function extractTextWithMinerU(fileBuffer: ArrayBuffer, fileName: string): Promise<string> {
+async function extractTextWithMinerU(env: any, fileBuffer: ArrayBuffer, fileName: string, publicFileUrl?: string): Promise<string> {
   try {
-    // 第一步：上传文件到 MinerU（使用 Agent API 上传文件）
-    const formData = new FormData();
-    const blob = new Blob([fileBuffer], { type: 'application/pdf' });
-    formData.append('file', blob, fileName);
+    const apiKey = getMineruApiKey(env);
+    if (!apiKey) {
+      console.warn('[MinerU] 未配置 MINERU_API_KEY，跳过 MinerU 提取');
+      return '';
+    }
+    if (!publicFileUrl) {
+      console.warn('[MinerU] 未提供 publicFileUrl，跳过 MinerU 提取');
+      return '';
+    }
 
-    const uploadResp = await fetch(`${MINERU_BASE_URL}/api/v1/agent/parse/file`, {
+    // 1. 创建 MinerU 提取任务（v4 API）
+    const taskResp = await fetch(`${MINERU_BASE_URL}/api/v4/extract/task`, {
       method: 'POST',
-      body: formData,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        url: publicFileUrl,
+        model_version: 'vlm',
+        enable_formula: false,
+        enable_table: true,
+        language: 'ch',
+      }),
     });
 
-    if (!uploadResp.ok) {
-      const errText = await uploadResp.text().catch(() => '');
-      console.warn(`[MinerU] Agent API 上传失败: ${uploadResp.status} ${errText.substring(0, 200)}`);
-      throw new Error(`MinerU upload failed: ${uploadResp.status}`);
+    if (!taskResp.ok) {
+      const errText = await taskResp.text().catch(() => '');
+      console.warn(`[MinerU] 创建任务失败: ${taskResp.status} ${errText.substring(0, 200)}`);
+      return '';
     }
 
-    const uploadResult: any = await uploadResp.json();
-    const taskId = uploadResult?.data?.task_id;
+    const taskResult: any = await taskResp.json();
+    if (taskResult.code !== 0) {
+      console.warn(`[MinerU] 创建任务返回错误: ${taskResult.msg}`);
+      return '';
+    }
+
+    const taskId = taskResult?.data?.task_id;
     if (!taskId) {
-      throw new Error('MinerU 未返回 task_id');
+      console.warn('[MinerU] 未返回 task_id');
+      return '';
     }
 
-    // 第二步：轮询直到任务完成（最多等 120 秒）
-    const pollUrl = `${MINERU_BASE_URL}/api/v1/agent/parse/task/${taskId}`;
-    const maxAttempts = 40;
-    const pollInterval = 3000;
+    // 2. 轮询直到任务完成（最多等 60 秒）
+    const maxAttempts = 30;
+    const pollInterval = 2000;
 
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise(r => setTimeout(r, pollInterval));
+
       try {
-        const pollResp = await fetch(pollUrl, { method: 'GET' });
+        const pollResp = await fetch(`${MINERU_BASE_URL}/api/v4/extract/task/${taskId}`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+
         if (!pollResp.ok) continue;
         const pollResult: any = await pollResp.json();
+
+        if (pollResult.code !== 0) continue;
         const state = pollResult?.data?.state;
 
         if (state === 'done') {
-          // 任务完成，获取结果
-          const resultUrl = pollResult?.data?.result_url || pollResult?.data?.full_zip_url;
+          // 任务完成，下载结果
+          const resultUrl = pollResult?.data?.full_zip_url || pollResult?.data?.result_url;
           if (resultUrl) {
-            const resultResp = await fetch(resultUrl);
-            if (resultResp.ok) {
-              const resultText = await resultResp.text();
-              // 从 zip 或 json 响应中提取纯文本
-              return extractTextFromMinerUResult(resultText, resultResp.headers.get('content-type') || '');
-            }
+            try {
+              const resultResp = await fetch(resultUrl);
+              if (resultResp.ok) {
+                const contentType = resultResp.headers.get('content-type') || '';
+                const resultText = await resultResp.text();
+                const text = extractTextFromMinerUResult(resultText, contentType);
+                if (text.length > 20) return text;
+              }
+            } catch {}
           }
-          // 如果有 direct_url 字段，直接获取
+          // 尝试从 data 中直接取文本
           const fullText = pollResult?.data?.full_text || pollResult?.data?.extracted_text || '';
-          if (fullText) return fullText;
-
+          if (fullText.length > 20) return fullText;
           return JSON.stringify(pollResult?.data || {});
         } else if (state === 'failed') {
           console.warn(`[MinerU] 任务失败: ${pollResult?.data?.err_msg || '未知错误'}`);
           return '';
         }
-        // state === 'pending' || 'running' → 继续轮询
+        // state === 'pending' | 'running' | 'converting' → 继续轮询
       } catch (pollErr: any) {
         // 轮询异常继续
       }
     }
+
     console.warn('[MinerU] 轮询超时');
     return '';
   } catch (err: any) {
@@ -218,19 +267,18 @@ async function extractTextWithMinerU(fileBuffer: ArrayBuffer, fileName: string):
   }
 }
 
-/** 从 MinerU 结果中提取纯文本（支持 zip 和 JSON 格式） */
+/** 从 MinerU 结果中提取纯文本 */
 function extractTextFromMinerUResult(resultText: string, contentType: string): string {
+  // MinerU 的结果通常是 zip 包，但 full_zip_url 可能返回 JSON 或 markdown
+  // 尝试从 JSON 响应中提取文本
   try {
-    // 如果是 JSON，提取 markdown 或 text 字段
-    if (contentType.includes('json') || resultText.trim().startsWith('{') || resultText.trim().startsWith('[')) {
+    if (resultText.trim().startsWith('{') || resultText.trim().startsWith('[')) {
       const parsed = JSON.parse(resultText);
-      // 可能是对象数组，每个对象有 markdown/text 字段
       if (Array.isArray(parsed)) {
         return parsed.map((item: any) => item.markdown || item.text || item.content || '').join('\n\n').trim();
       }
       return parsed.markdown || parsed.text || parsed.content || parsed.data?.markdown || parsed.data?.text || '';
     }
-    // 如果是 markdown/文本，直接返回
     return resultText;
   } catch {
     return resultText || '';
@@ -2587,7 +2635,18 @@ app.post('/api/resumes', authMiddleware, async (c) => {
       if (!extractedText || extractedText.length < 20) {
         console.log('[Upload] 前端未传 pdf_text，使用 MinerU 提取 PDF 文本');
         try {
-          extractedText = await extractTextWithMinerU(fileBuffer, file.name);
+          // 把文件存入临时存储，生成公网可访问的 URL 供 MinerU 下载
+          const mineruFileKey = crypto.randomUUID();
+          tempFileStore.set(mineruFileKey, {
+            data: fileBuffer,
+            name: file.name,
+            expiry: Date.now() + TEMP_FILE_TTL,
+          });
+          // 从请求中获取当前公网 URL（MinerU 需要从公网 URL 下载文件）
+          const originUrl = new URL(c.req.url);
+          const mineruFileUrl = `${originUrl.origin}/api/temp-file/${mineruFileKey}/${encodeURIComponent(file.name)}`;
+
+          extractedText = await extractTextWithMinerU(c.env, fileBuffer, file.name, mineruFileUrl);
           if (extractedText && extractedText.length > 20) {
             console.log(`[Upload] MinerU 提取成功: ${extractedText.length} 字符`);
           } else {
@@ -2791,6 +2850,27 @@ app.get('/api/resumes/:id', authMiddleware, async (c) => {
   } catch (e: any) {
     return c.json({ detail: e.message }, 500);
   }
+});
+
+// MinerU 临时文件服务路由（提供公网可访问的文件 URL）
+app.get('/api/temp-file/:key/:filename', async (c) => {
+  const key = c.req.param('key');
+  const entry = tempFileStore.get(key);
+  if (!entry) {
+    return c.json({ detail: 'File not found or expired' }, 404);
+  }
+  if (entry.expiry < Date.now()) {
+    tempFileStore.delete(key);
+    return c.json({ detail: 'File expired' }, 410);
+  }
+  return new Response(entry.data, {
+    headers: {
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${entry.name}"`,
+      'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': '*',
+    },
+  });
 });
 
 // 下载简历附件（原始 PDF）- 302 重定向到飞书附件直链
