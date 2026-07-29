@@ -251,7 +251,11 @@ const AppLayout: React.FC = () => {
               showSearch
               placeholder="负责人筛选"
               value={selectedPerson || undefined}
-              onChange={(val) => setSelectedPerson(val || '')}
+              onChange={(val) => {
+                setSelectedPerson(val || '');
+                // 强制刷新当前页面数据（axios 拦截器会自动带上 responsible_person）
+                setTimeout(() => window.location.reload(), 100);
+              }}
               style={{ width: 160 }}
               suffixIcon={<FilterOutlined />}
               optionFilterProp="label"

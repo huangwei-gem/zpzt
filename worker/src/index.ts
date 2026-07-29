@@ -933,28 +933,23 @@ function makeListHandler(table: string, filters: FilterConfig = {}) {
     // 全局负责人筛选
     const rp = c.req.query('responsible_person');
     if (rp) {
-      // 查出该人的所有岗位名
-      const rows1 = (await db.prepare("SELECT DISTINCT mapped_name FROM position_mappings WHERE responsible_person = ?").bind(rp).all()).results || [];
-      const rows2 = (await db.prepare("SELECT DISTINCT title FROM positions WHERE responsible_person = ?").bind(rp).all()).results || [];
-      const positions = [...new Set([...rows1.map((r: any) => r.mapped_name), ...rows2.map((r: any) => r.title)].filter(Boolean))];
-      if (positions.length > 0) {
-        const ph = positions.map(() => '?').join(',');
-        // 按表类型分别处理
-        if (table === 'positions') {
-          conditions.push(`title IN (${ph})`);
-          binds.push(...positions);
-        } else if (table === 'interviews') {
-          conditions.push(`(position_id IN (SELECT id FROM positions WHERE title IN (${ph})) OR primary_interviewer = ? OR secondary_interviewer = ? OR interviewer = ?)`);
-          binds.push(...positions, rp, rp, rp);
-        } else {
-          // 通过 position_id 关联的表
-          conditions.push(`position_id IN (SELECT id FROM positions WHERE title IN (${ph}))`);
-          binds.push(...positions);
-        }
+      if (table === 'positions') {
+        conditions.push(`responsible_person = ?`);
+        binds.push(rp);
+      } else if (table === 'interviews') {
+        conditions.push(`(primary_interviewer = ? OR secondary_interviewer = ? OR interviewer = ?)`);
+        binds.push(rp, rp, rp);
+      } else if (table === 'job_requisitions' || table === 'requisitions' || table === 'job_requisition') {
+        conditions.push(`position_id IN (SELECT id FROM positions WHERE responsible_person = ?)`);
+        binds.push(rp);
+      } else if (table === 'resumes') {
+        // resumes 表通过 position_id 关联
+        conditions.push(`position_id IN (SELECT id FROM positions WHERE responsible_person = ?)`);
+        binds.push(rp);
       } else {
-        // 没有对应岗位时，fallback 到面试官字段
-        conditions.push(`(responsible_person = ? OR primary_interviewer = ? OR secondary_interviewer = ? OR interviewer = ?)`);
-        binds.push(rp, rp, rp, rp);
+        // 其他表统一用 position_id 关联
+        conditions.push(`position_id IN (SELECT id FROM positions WHERE responsible_person = ?)`);
+        binds.push(rp);
       }
     }
     if (conditions.length > 0) sql += ' WHERE ' + conditions.join(' AND ');
