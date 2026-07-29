@@ -2219,6 +2219,58 @@ app.post('/api/interviews/create-from-talent', authMiddleware, async (c) => {
   }
 });
 
+/**
+ * 面试邮件预览
+ * POST /api/interviews/email-preview
+ */
+app.post('/api/interviews/email-preview', authMiddleware, async (c) => {
+  try {
+    const body = await c.req.json();
+    const resume = body.resume_id ? await c.env.DB.prepare('SELECT candidate_name FROM resumes WHERE id = ?').bind(body.resume_id).first() as any : null;
+    const candidateName = resume?.candidate_name || '候选人';
+    const round = body.round || 1;
+    const roundText = ['一面', '二面', '三面', '四面', '终面'][round - 1] || `第${round}轮`;
+    const timeStr = body.interview_time ? new Date(body.interview_time).toLocaleString('zh-CN', { hour12: false }) : '待确认';
+    const typeMap: Record<string, string> = { onsite: '现场面试', video: '视频面试', phone: '电话面试' };
+    const typeText = typeMap[body.interview_type] || body.interview_type || '面试';
+    const content = [
+      `${candidateName} 您好，`,
+      `感谢您应聘我司岗位，现邀请您参加${roundText}${typeText}。`,
+      `面试时间：${timeStr}`,
+      body.interview_location ? `面试地点：${body.interview_location}` : '',
+      body.meeting_link ? `会议链接：${body.meeting_link}` : '',
+      '请按时参加，如有问题请与我们联系。',
+      `-- 此邮件由 AI 智能招聘系统自动生成`,
+    ].filter(Boolean).join('\n');
+    return c.json({ subject: `面试邀请 - ${candidateName} - ${roundText}`, content });
+  } catch (e: any) {
+    return c.json({ detail: e.message }, 500);
+  }
+});
+
+/**
+ * 发送面试通知邮件
+ * POST /api/interviews/:id/send-email
+ */
+app.post('/api/interviews/:id/send-email', authMiddleware, async (c) => {
+  try {
+    const id = c.req.param('id');
+    const body = await c.req.json();
+    const interview = await c.env.DB.prepare(
+      'SELECT i.*, r.candidate_name, r.email FROM interviews i LEFT JOIN resumes r ON i.resume_id = r.id WHERE i.id = ?'
+    ).bind(id).first() as any;
+    if (!interview) return c.json({ detail: '面试记录不存在' }, 404);
+    const subject = body.subject || `面试通知 - ${interview.candidate_name || '候选人'}`;
+    const emailContent = body.content || '请按时参加面试。';
+    await c.env.DB.prepare(
+      "UPDATE interviews SET email_subject = ?, email_content = ?, email_sent = 1, updated_at = ? WHERE id = ?"
+    ).bind(subject, emailContent, now(), id).run();
+    return c.json({ ok: true, to: interview.email || '', subject });
+  } catch (e: any) {
+    return c.json({ detail: e.message }, 500);
+  }
+});
+
 // ---- 简历上传：上传 PDF → D1 存储 → 存 Bitable ----
 app.post('/api/resumes', authMiddleware, async (c) => {
   try {
@@ -3521,6 +3573,52 @@ app.get('/api/interviews/:id/questions', authMiddleware, async (c) => {
   return c.json(qs);
 });
 
+app.put('/api/interviews/:id/questions', authMiddleware, async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const questions = typeof body === 'string' ? body : JSON.stringify(body);
+  await c.env.DB.prepare('UPDATE interviews SET questions = ?, updated_at = ? WHERE id = ?').bind(questions, now(), id).run();
+  return c.json({ ok: true });
+});
+
+/**
+ * 获取面试官提交状态
+ * GET /api/interviews/:id/submission-status
+ */
+app.get('/api/interviews/:id/submission-status', authMiddleware, async (c) => {
+  const id = c.req.param('id');
+  const row = await c.env.DB.prepare('SELECT id, interviewer, primary_interviewer, secondary_interviewer, panels FROM interviews WHERE id = ?').bind(id).first() as any;
+  if (!row) return c.json({ detail: 'Not found' }, 404);
+  const panels: any[] = [];
+  if (row.panels) { try { panels.push(...JSON.parse(row.panels)); } catch {} }
+  const interviewers = [row.interviewer, row.primary_interviewer, row.secondary_interviewer].filter(Boolean);
+  const allSubmitted = panels.length > 0 ? panels.every(p => p.is_submitted) : false;
+  return c.json({ interviewers, panels, all_submitted: allSubmitted, total: interviewers.length, submitted: panels.filter(p => p.is_submitted).length });
+});
+
+/**
+ * 组长评分
+ * POST /api/interviews/:id/panel-score
+ */
+app.post('/api/interviews/:id/panel-score', authMiddleware, async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const currentUser = c.get('user');
+  const panelsRaw = await c.env.DB.prepare('SELECT panels FROM interviews WHERE id = ?').bind(id).first() as any;
+  let panels: any[] = [];
+  if (panelsRaw?.panels) { try { panels = JSON.parse(panelsRaw.panels); } catch {} }
+  panels.push({
+    interviewer_id: currentUser?.id || currentUser?.email || 'unknown',
+    interviewer_name: currentUser?.full_name || '',
+    scores: body.scores || {},
+    comments: body.comments || {},
+    is_submitted: true,
+    submitted_at: now(),
+  });
+  await c.env.DB.prepare('UPDATE interviews SET panels = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(panels), now(), id).run();
+  return c.json({ ok: true, panels });
+});
+
 app.post('/api/interviews/:id/start', authMiddleware, async (c) => {
   const id = c.req.param('id');
   await c.env.DB.prepare("UPDATE interviews SET status = 'in_progress', started_at = ? WHERE id = ?").bind(now(), id).run();
@@ -3707,6 +3805,30 @@ app.post('/api/requisitions/:id/reject', authMiddleware, async (c) => {
 });
 
 // ==================== Probation Actions ====================
+
+/**
+ * AI 转正评估
+ * POST /api/probation/:id/ai-assessment
+ */
+app.post('/api/probation/:id/ai-assessment', authMiddleware, async (c) => {
+  try {
+    const id = c.req.param('id');
+    const row = await c.env.DB.prepare('SELECT * FROM probation_records WHERE id = ?').bind(id).first() as any;
+    if (!row) return c.json({ detail: '记录不存在' }, 404);
+    const monthlyReviews = row.monthly_reviews || '[]';
+    let reviews: any[] = [];
+    try { reviews = JSON.parse(typeof monthlyReviews === 'string' ? monthlyReviews : JSON.stringify(monthlyReviews)); } catch {}
+    const reviewText = reviews.length > 0
+      ? reviews.map((r: any, i: number) => `第${i + 1}次考核：${r.result || '待评估'} - ${r.comment || '无评语'}`).join('\n')
+      : '暂无考核记录';
+    const prompt = `根据以下试用期考核信息生成转正评估意见（中文，简洁、全面）：\n\n员工：${row.name || '未知'}\n岗位：${row.title || '未知'}\n试用期：${row.start_date || '未知'} ~ ${row.end_date || '未知'}\n考核记录：${reviewText}\n\n请输出包含：工作表现总结、能力评估、转正建议的评估报告。`;
+    const assessment = await callAI(c.env, '你是一个专业的 HR 转正评估分析师。请根据提供的试用期考核信息，生成一份结构化的转正评估报告。', prompt);
+    await c.env.DB.prepare('UPDATE probation_records SET ai_assessment = ?, updated_at = ? WHERE id = ?').bind(assessment, now(), id).run();
+    return c.json({ ok: true, final_assessment: assessment });
+  } catch (e: any) {
+    return c.json({ detail: e.message }, 500);
+  }
+});
 
 app.post('/api/probation/:id/confirm', authMiddleware, async (c) => {
   const id = c.req.param('id');
@@ -6945,6 +7067,93 @@ app.post('/api/resumes/auto-evaluate-all', authMiddleware, async (c) => {
 });
 
 /**
+ * BOSS 直聘批量导入简历
+ * POST /api/resumes/import-boss
+ */
+app.post('/api/resumes/import-boss', authMiddleware, async (c) => {
+  try {
+    const body = await c.req.json();
+    const items: any[] = body.items || [];
+    let imported = 0, skipped = 0;
+    for (const item of items) {
+      const name = item.name || item.candidate_name || '';
+      const phone = item.phone || '';
+      if (!name) { skipped++; continue; }
+      const exist = await c.env.DB.prepare(
+        "SELECT id FROM resumes WHERE candidate_name = ? AND (phone = ? OR phone = '' OR ? = '') LIMIT 1"
+      ).bind(name, phone, phone).first();
+      if (exist) { skipped++; continue; }
+      const rawText = [
+        `姓名：${name}`, item.phone ? `手机：${item.phone}` : '',
+        item.title ? `期望岗位：${item.title}` : '',
+        item.current_company ? `当前公司：${item.current_company}` : '',
+        item.education ? `学历：${item.education}` : '',
+        item.school ? `毕业院校：${item.school}` : '',
+        item.experience ? `工作经验：${item.experience}` : '',
+        item.resume_text || '',
+      ].filter(Boolean).join('\n');
+      await c.env.DB.prepare(
+        `INSERT INTO resumes (id, candidate_name, phone, raw_text, position_applied, source, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
+      ).bind(uuid(), name, phone, rawText, item.title || '', 'boss', now(), now()).run();
+      imported++;
+    }
+    return c.json({ ok: true, imported, skipped });
+  } catch (e: any) {
+    return c.json({ detail: e.message }, 500);
+  }
+});
+
+/**
+ * 批量 AI 评估简历
+ * POST /api/resumes/batch-ai-evaluate
+ */
+app.post('/api/resumes/batch-ai-evaluate', authMiddleware, async (c) => {
+  try {
+    const rows = await c.env.DB.prepare(
+      "SELECT id, candidate_name, raw_text, ai_review FROM resumes WHERE raw_text IS NOT NULL AND raw_text != '' AND (ai_review IS NULL OR ai_review = '') LIMIT 50"
+    ).all() as any;
+    const list = rows.results || [];
+    let evaluated = 0, failed = 0;
+    const errors: string[] = [];
+    for (const row of list) {
+      try {
+        const result = await callAI(c.env, '你是一个专业的招聘助手。根据简历文本生成一份简洁的评估报告，包含：匹配度评分(0-100)、优势分析、风险点。以 JSON 格式输出。', `简历文本：${(row.raw_text || '').slice(0, 3000)}`);
+        await c.env.DB.prepare('UPDATE resumes SET ai_review = ?, updated_at = ? WHERE id = ?').bind(result, now(), row.id).run();
+        evaluated++;
+      } catch { failed++; errors.push(row.candidate_name || row.id); }
+    }
+    return c.json({ ok: true, evaluated, skipped: list.length - evaluated - failed, failed, errors: errors.slice(0, 10) });
+  } catch (e: any) {
+    return c.json({ detail: e.message }, 500);
+  }
+});
+
+/**
+ * 批量重新解析简历
+ * POST /api/resumes/batch-reparse
+ */
+app.post('/api/resumes/batch-reparse', authMiddleware, async (c) => {
+  try {
+    const rows = await c.env.DB.prepare("SELECT id FROM resumes WHERE raw_text IS NOT NULL AND raw_text != '' LIMIT 100").all() as any;
+    const list = rows.results || [];
+    let count = 0;
+    for (const row of list) {
+      try {
+        const resume = await c.env.DB.prepare('SELECT raw_text FROM resumes WHERE id = ?').bind(row.id).first() as any;
+        if (!resume?.raw_text) continue;
+        const result = await callAI(c.env, '你是一个专业的简历解析助手。根据简历文本，以 JSON 格式输出结构化信息，包括：姓名、手机、邮箱、学历、学校、专业、工作经验、技能列表。', resume.raw_text.slice(0, 3000));
+        await c.env.DB.prepare('UPDATE resumes SET parsed_data = ?, updated_at = ? WHERE id = ?').bind(result, now(), row.id).run();
+        count++;
+      } catch { /* skip failed */ }
+    }
+    return c.json({ ok: true, message: `已提交 ${count} 个简历重新解析`, count });
+  } catch (e: any) {
+    return c.json({ detail: e.message }, 500);
+  }
+});
+
+/**
  * 修复评估不完整的简历（飞书人才库中 AI简历评估 为空/太短/仅含默认模板的记录）
  * 逻辑：扫描所有记录 → 对不完整的记录 → 从 D1/飞书附件获取 PDF 原文 → 用 reparse 完整 AI 解析 → 写回飞书 & D1
  */
@@ -7578,6 +7787,11 @@ export default {
       "ALTER TABLE position_mappings ADD COLUMN responsible_person TEXT DEFAULT ''",
       "ALTER TABLE position_mappings ADD COLUMN interviewers TEXT DEFAULT ''",
       "ALTER TABLE position_mappings ADD COLUMN updated_at TEXT DEFAULT ''",
+      "ALTER TABLE probation_records ADD COLUMN ai_assessment TEXT DEFAULT ''",
+      "ALTER TABLE interviews ADD COLUMN email_subject TEXT DEFAULT ''",
+      "ALTER TABLE interviews ADD COLUMN email_content TEXT DEFAULT ''",
+      "ALTER TABLE interviews ADD COLUMN email_sent INTEGER DEFAULT 0",
+      "ALTER TABLE resumes ADD COLUMN source TEXT DEFAULT ''",
     ];
     for (const sql of colMigrations) {
       try { await env.DB.prepare(sql).run(); } catch { /* already exists */ }
