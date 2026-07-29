@@ -5888,36 +5888,105 @@ app.post('/api/cron/interview-reminder', async (c) => {
 
 /**
  * 构建面试官通知卡片 — 提醒面试官审阅新候选人
+ * 使用飞书卡片新版 column 嵌套写法，分栏信息块 + 操作按钮
  */
 function buildInterviewerCard(name: string, position: string, city: string, analysis: string, operatorName?: string): any {
-  const summary = (analysis || '').substring(0, 500);
+  const summary = (analysis || '').trim();
+  const nowStr = new Date().toLocaleString('zh-CN', { hour12: false });
+  const posLabel = position || '待确认岗位';
+  const cityLabel = city || '未填写';
+
+  const elements: any[] = [];
+
+  // 1. 候选人姓名 + 岗位简介（顶部高亮）
+  elements.push({
+    tag: 'div',
+    text: {
+      tag: 'lark_md',
+      content: `**${name}**  有一位新候选人等待你审阅\n申请岗位：**${posLabel}**`
+    }
+  });
+
+  elements.push({ tag: 'hr' });
+
+  // 2. 关键信息分栏：城市 / 推荐人 / 提醒时间
+  elements.push({
+    tag: 'column_set',
+    flex_mode: 'none',
+    horizontal_spacing: 'default',
+    background_style: 'grey',
+    columns: [
+      {
+        tag: 'column', width: 'weighted', weight: 1, vertical_align: 'top',
+        elements: [
+          { tag: 'markdown', content: `<font color='grey'>📍 城市</font>\n${cityLabel}`, text_align: 'left' }
+        ]
+      },
+      {
+        tag: 'column', width: 'weighted', weight: 1, vertical_align: 'top',
+        elements: [
+          { tag: 'markdown', content: `<font color='grey'>👤 推荐人</font>\n${operatorName || '系统'}`, text_align: 'left' }
+        ]
+      },
+      {
+        tag: 'column', width: 'weighted', weight: 1, vertical_align: 'top',
+        elements: [
+          { tag: 'markdown', content: `<font color='grey'>⏰ 时间</font>\n${nowStr.slice(5, 16)}`, text_align: 'left' }
+        ]
+      }
+    ]
+  });
+
+  // 3. AI 分析摘要（若有）
+  if (summary) {
+    elements.push({ tag: 'hr' });
+    elements.push({
+      tag: 'div',
+      text: { tag: 'lark_md', content: `🤖 **AI 初筛摘要**\n${summary.length > 600 ? summary.slice(0, 600) + '…' : summary}` }
+    });
+  }
+
+  // 4. 操作按钮
+  elements.push({ tag: 'hr' });
+  elements.push({
+    tag: 'action',
+    actions: [
+      {
+        tag: 'button',
+        text: { tag: 'plain_text', content: '🔍 查看候选人简历' },
+        type: 'primary',
+        url: 'https://ai-interview-22u.pages.dev/interviews'
+      },
+      {
+        tag: 'button',
+        text: { tag: 'plain_text', content: '📋 进入面试管理' },
+        type: 'default',
+        url: 'https://ai-interview-22u.pages.dev/talent-pool'
+      }
+    ]
+  });
+
+  // 5. 底部备注
+  elements.push({
+    tag: 'note',
+    elements: [{ tag: 'plain_text', content: `请尽快完成面试安排并在系统内填写评价 · AI 智能招聘系统` }]
+  });
+
   return {
     config: { wide_screen_mode: true },
     header: {
-      title: { tag: 'plain_text', content: `🆕 新候选人待审阅: ${name}` },
-      template: 'blue'
+      title: { tag: 'plain_text', content: `🎯 新候选人待审阅 · ${name}` },
+      subtitle: { tag: 'plain_text', content: posLabel },
+      template: 'blue',
+      ud_icon: { tag: 'new_s_filled', color: 'blue' }
     },
-    elements: [
-      {
-        tag: 'div',
-        text: { tag: 'lark_md', content: `**候选人：** ${name}\n**岗位：** ${position}\n**城市：** ${city || '未知'}` }
-      },
-      { tag: 'hr' },
-      {
-        tag: 'div',
-        text: { tag: 'lark_md', content: summary || '（无 AI 分析内容）' }
-      },
-      { tag: 'hr' },
-      {
-        tag: 'note',
-        elements: [{ tag: 'plain_text', content: `${operatorName || '系统'} 推荐 | AI 智能面试系统` }]
-      }
-    ]
+    elements
   };
 }
 
 /**
- * 构建招聘日报飞书卡片（表格格式）
+ * 构建招聘日报飞书卡片
+ * 顶部 4 个统计大数字块 + 各负责人明细表 + AI 摘要
  */
 function buildDailyReportCard(
   dateStr: string,
@@ -5927,67 +5996,120 @@ function buildDailyReportCard(
 ): any {
   const elements: any[] = [];
 
-  // 日期标题
+  // 入库率
+  const rate = totals.grandTotal > 0 ? Math.round((totals.grandApproved / totals.grandTotal) * 100) : 0;
+
+  // 1. 顶部 4 列统计大数字（灰底分栏）
+  const stat = (label: string, value: number, icon: string, color: string) => ({
+    tag: 'column', width: 'weighted', weight: 1, vertical_align: 'top',
+    elements: [
+      { tag: 'markdown', text_align: 'center',
+        content: `<font color='grey'>${icon} ${label}</font>\n<font color='${color}'>**${value}**</font>` }
+    ]
+  });
+  elements.push({
+    tag: 'column_set', flex_mode: 'bisect', background_style: 'grey', horizontal_spacing: 'small',
+    columns: [
+      stat('总简历', totals.grandTotal, '📥', 'black'),
+      stat('待处理', totals.grandPending, '⏳', 'orange'),
+      stat('已入库', totals.grandApproved, '✅', 'green'),
+      stat('淘汰', totals.grandRejected, '🗑️', 'red'),
+    ]
+  });
+
+  // 2. 入库率进度条式提示
   elements.push({
     tag: 'div',
-    text: { tag: 'lark_md', content: `📅 **招聘日报 · ${dateStr}**` }
+    text: { tag: 'lark_md', content: `整体入库率：<font color='green'>**${rate}%**</font>  （${totals.grandApproved}/${totals.grandTotal}）` }
+  });
+
+  elements.push({ tag: 'hr' });
+
+  // 3. 各负责人明细表（表头 + 数据行 + 合计行），统一用新版 column 嵌套写法
+  const col = (content: string, weight = 1, align: 'left' | 'center' = 'center') => ({
+    tag: 'column', width: 'weighted', weight, vertical_align: 'top',
+    elements: [{ tag: 'markdown', content, text_align: align }]
   });
 
   // 表头
   elements.push({
-    tag: 'column_set', flex_mode: 'none', background_style: 'grey',
+    tag: 'column_set', flex_mode: 'none', background_style: 'grey', horizontal_spacing: 'small',
     columns: [
-      { tag: 'markdown', content: '**负责人**', width: '90px' },
-      { tag: 'markdown', content: '**总简历**', width: '70px' },
-      { tag: 'markdown', content: '**待处理**', width: '70px' },
-      { tag: 'markdown', content: '**已入库**', width: '70px' },
-      { tag: 'markdown', content: '**淘汰**', width: '60px' },
+      col('**负责人**', 2, 'left'),
+      col('**总简历**', 1),
+      col('**待处理**', 1),
+      col('**已入库**', 1),
+      col('**淘汰**', 1),
     ]
   });
 
   // 数据行
   for (const s of ownerStats) {
     elements.push({
-      tag: 'column_set', flex_mode: 'none',
+      tag: 'column_set', flex_mode: 'none', background_style: 'default', horizontal_spacing: 'small',
       columns: [
-        { tag: 'markdown', content: s.name, width: '90px' },
-        { tag: 'markdown', content: `**${s.total}**`, width: '70px' },
-        { tag: 'markdown', content: s.pending > 0 ? `⚠️ **${s.pending}**` : `${s.pending}`, width: '70px' },
-        { tag: 'markdown', content: `✅ **${s.approved}**`, width: '70px' },
-        { tag: 'markdown', content: s.rejected > 0 ? `❌ ${s.rejected}` : `${s.rejected}`, width: '60px' },
+        col(s.name, 2, 'left'),
+        col(`**${s.total}**`, 1),
+        col(s.pending > 0 ? `⚠️ **${s.pending}**` : `${s.pending}`, 1),
+        col(s.approved > 0 ? `✅ **${s.approved}**` : `${s.approved}`, 1),
+        col(s.rejected > 0 ? `❌ ${s.rejected}` : `${s.rejected}`, 1),
       ]
     });
   }
 
   // 合计行
   elements.push({
-    tag: 'column_set', flex_mode: 'none', background_style: 'grey',
+    tag: 'column_set', flex_mode: 'none', background_style: 'grey', horizontal_spacing: 'small',
     columns: [
-      { tag: 'markdown', content: '**合计**', width: '90px' },
-      { tag: 'markdown', content: `**${totals.grandTotal}**`, width: '70px' },
-      { tag: 'markdown', content: totals.grandPending > 0 ? `⚠️ **${totals.grandPending}**` : `**${totals.grandPending}**`, width: '70px' },
-      { tag: 'markdown', content: `✅ **${totals.grandApproved}**`, width: '70px' },
-      { tag: 'markdown', content: totals.grandRejected > 0 ? `❌ **${totals.grandRejected}**` : `**${totals.grandRejected}**`, width: '60px' },
+      col('**合计**', 2, 'left'),
+      col(`**${totals.grandTotal}**`, 1),
+      col(totals.grandPending > 0 ? `⚠️ **${totals.grandPending}**` : `**${totals.grandPending}**`, 1),
+      col(`✅ **${totals.grandApproved}**`, 1),
+      col(totals.grandRejected > 0 ? `❌ **${totals.grandRejected}**` : `**${totals.grandRejected}**`, 1),
     ]
   });
 
-  // AI 摘要
+  // 4. AI 摘要
+  const summaryText = (aiSummary || '').trim();
+  if (summaryText) {
+    elements.push({ tag: 'hr' });
+    elements.push({
+      tag: 'div',
+      text: { tag: 'lark_md', content: `🤖 **AI 分析摘要**\n${summaryText.length > 800 ? summaryText.slice(0, 800) + '…' : summaryText}` }
+    });
+  }
+
+  // 5. 操作 + 备注
   elements.push({ tag: 'hr' });
   elements.push({
-    tag: 'div',
-    text: { tag: 'lark_md', content: `🤖 **AI 摘要**\n${aiSummary}` }
+    tag: 'action',
+    actions: [
+      {
+        tag: 'button',
+        text: { tag: 'plain_text', content: '📊 查看招聘看板' },
+        type: 'primary',
+        url: 'https://ai-interview-22u.pages.dev/dashboard'
+      },
+      {
+        tag: 'button',
+        text: { tag: 'plain_text', content: '📥 进入简历初筛' },
+        type: 'default',
+        url: 'https://ai-interview-22u.pages.dev/resume-screening'
+      }
+    ]
   });
-  elements.push({ tag: 'hr' });
   elements.push({
     tag: 'note',
-    elements: [{ tag: 'plain_text', content: `AI 智能招聘系统 · ${new Date().toLocaleString('zh-CN')}` }]
+    elements: [{ tag: 'plain_text', content: `AI 智能招聘系统 · 生成于 ${new Date().toLocaleString('zh-CN', { hour12: false })}` }]
   });
 
   return {
     config: { wide_screen_mode: true },
     header: {
-      title: { tag: 'plain_text', content: `📊 招聘日报 ${dateStr}` },
-      template: 'blue'
+      title: { tag: 'plain_text', content: `📊 招聘日报 · ${dateStr}` },
+      subtitle: { tag: 'plain_text', content: `共 ${ownerStats.length} 位负责人 · ${totals.grandTotal} 份简历` },
+      template: 'turquoise',
+      ud_icon: { tag: 'chart_ring_filled', color: 'turquoise' }
     },
     elements
   };
