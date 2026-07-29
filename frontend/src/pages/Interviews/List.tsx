@@ -108,8 +108,12 @@ const InterviewsList: React.FC = () => {
     setLoading(true);
     try {
       // 同时拉候选人（从简历管理已入库的）+ 面试记录
+      const reqParams: any = { candidate_name: search || undefined };
+      if (selectedPerson) {
+        reqParams.responsible_person = selectedPerson;
+      }
       const [candidates, interviews] = await Promise.all([
-        request.get('/interviews/pipeline-candidates', { params: { candidate_name: search || undefined } }).catch(() => []),
+        request.get('/interviews/pipeline-candidates', { params: reqParams }).catch(() => []),
         request.get('/interviews').catch(() => []),
       ]);
 

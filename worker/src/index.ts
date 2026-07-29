@@ -1923,10 +1923,11 @@ app.get('/api/interviews/pipeline-candidates', authMiddleware, async (c) => {
 
         filtered = result.filter((r: any) => {
           const pos = (r.mapped_position || r.position_applied || '').trim().toLowerCase();
-          // 岗位匹配 或 该候选人的面试官之一是筛选人
+          // 岗位匹配 或 该候选人的面试官/负责人之一是筛选人
           const isInterviewer = r.primary_interviewer === responsiblePerson
             || r.secondary_interviewer === responsiblePerson
-            || r.interviewer === responsiblePerson;
+            || r.interviewer === responsiblePerson
+            || r.biz_owner === responsiblePerson;
           return personPositions.has(pos) || isInterviewer;
         });
       } catch { /* 负责人筛选失败时不阻塞 */ }
@@ -2371,18 +2372,33 @@ app.post('/api/resumes', authMiddleware, async (c) => {
       return c.json({ detail: '创建飞书记录失败' }, 500);
     }
 
-    // 2. 在 D1 保存文件内容（base64）— 只存小文件，超过 800KB 跳过（D1 单字段上限 1MB）
+    // 2. 保存文件内容到 D1（小文件）或上传到飞书云盘（大文件）
     try {
       if (fileSize < 800000) {
         await c.env.DB.prepare(
           `INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`
         ).bind(recordId, fileId, file.name, fileSize, fileBase64).run();
       } else {
-        console.log(`[Upload] 跳过 D1 存储：文件 ${file.name} 超出大小限制 (${fileSize} bytes)`);
+        // 大文件上传到飞书云盘，然后挂到 Bitable 记录上
+        try {
+          const feishuToken = await getFeishuToken(c.env);
+          const fileToken = await uploadToFeishuDrive(feishuToken, file.name, fileBuffer, c.env.FEISHU_DRIVE_FOLDER_TOKEN || FEISHU_CONFIG.driveFolderToken);
+          if (fileToken) {
+            // 更新 Bitable 记录，挂上附件
+            await bitableUpdateRecord(c.env, tableId, recordId, {
+              '简历附件-批量导入': [{ file_token: fileToken, name: file.name, type: 'pdf', size: fileSize }],
+            });
+            console.log(`[Upload] 大文件 ${file.name} (${fileSize} bytes) 已上传到飞书云盘 file_token=${fileToken}`);
+          } else {
+            console.log(`[Upload] 飞书云盘上传失败 ${file.name}，跳过文件存储`);
+          }
+        } catch (uploadErr: any) {
+          console.log(`[Upload] 飞书云盘上传异常: ${uploadErr.message}，跳过文件存储`);
+        }
       }
     } catch (e: any) {
       if (String(e.message).includes('TOOBIG') || String(e.message).includes('too big')) {
-        console.log(`[Upload] D1 TOOBIG: ${file.name} (${fileSize} bytes), 跳过文件存储，下载时走飞书附件`);
+        console.log(`[Upload] D1 TOOBIG: ${file.name} (${fileSize} bytes), 跳过文件存储`);
       } else {
         return c.json({ detail: '保存文件失败: ' + e.message }, 500);
       }
