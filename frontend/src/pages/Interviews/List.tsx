@@ -309,6 +309,22 @@ const InterviewsList: React.FC = () => {
       ),
     },
     {
+      title: '入库时间', key: 'create_time', width: 150, sorter: (a: any, b: any) => {
+        const ta = a.create_time ? new Date(a.create_time).getTime() : 0;
+        const tb = b.create_time ? new Date(b.create_time).getTime() : 0;
+        return tb - ta;
+      }, defaultSortOrder: 'descend' as const,
+      render: (_: any, r: MergedRow) => {
+        if (!r.create_time) return <span style={{ color: '#ccc' }}>-</span>;
+        try {
+          const d = new Date(r.create_time);
+          if (isNaN(d.getTime())) return r.create_time;
+          const pad = (n: number) => String(n).padStart(2, '0');
+          return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        } catch { return r.create_time; }
+      },
+    },
+    {
       title: '标准岗位', key: 'position', width: 150,
       render: (_: any, r: MergedRow) => {
         if (r.position) {

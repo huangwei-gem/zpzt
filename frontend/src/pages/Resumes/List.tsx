@@ -1240,9 +1240,9 @@ const ResumesList: React.FC = () => {
                     <span style={{ fontWeight: 600, fontSize: 15 }}>{record.candidate_name || '未知'}</span>
                     {/* 入库时间 */}
                     {record.create_time && (
-                      <span style={{ color: '#bfbfbf', fontSize: 12 }}>
+                      <Tag style={{ margin: 0, fontSize: 11, border: '1px solid #e6d5ff', background: '#f9f0ff', color: '#531dab' }}>
                         🕐 {formatCreateTime(record.create_time)}
-                      </span>
+                      </Tag>
                     )}
                     <span style={{ color: '#8c8c8c', fontSize: 13 }}>
                       {[

@@ -8,7 +8,7 @@ import {
   ThunderboltOutlined, LoadingOutlined, ReloadOutlined,
   DeleteOutlined, RobotOutlined, SendOutlined,
   ClockCircleOutlined, TeamOutlined, UserOutlined,
-  FileTextOutlined
+  FileTextOutlined, FilterOutlined
 } from '@ant-design/icons';
 import request from '../../utils/request';
 import ReactMarkdown from 'react-markdown';
@@ -29,6 +29,10 @@ const DailyReportsList: React.FC = () => {
   const [generating, setGenerating] = useState(false);
   const [selectedDate, setSelectedDate] = useState<dayjs.Dayjs>(dayjs());
 
+  // 负责人筛选
+  const [ownerFilter, setOwnerFilter] = useState<string>('all');
+  const [ownerList, setOwnerList] = useState<string[]>([]);
+
   // 发送到飞书
   const [sendModal, setSendModal] = useState<any>(null);
   const [sendTargetType, setSendTargetType] = useState<'chat' | 'user'>('chat');
@@ -38,27 +42,46 @@ const DailyReportsList: React.FC = () => {
   const [contacts, setContacts] = useState<{ groups: ContactItem[]; users: ContactItem[] }>({ groups: [], users: [] });
   const [contactsLoading, setContactsLoading] = useState(false);
 
+  // 获取负责人列表
+  const fetchOwners = useCallback(async () => {
+    try {
+      const res = await request.get('/daily-reports/owners') as any;
+      setOwnerList(res?.owners || []);
+    } catch {
+      // 非关键功能，静默失败
+    }
+  }, []);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await request.get('/daily-reports');
+      const params: any = {};
+      if (ownerFilter && ownerFilter !== 'all') {
+        params.owner = ownerFilter;
+      }
+      const res = await request.get('/daily-reports', { params });
       setData(res || []);
     } catch {
       message.error('加载失败');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [ownerFilter]);
 
+  useEffect(() => { fetchOwners(); }, [fetchOwners]);
   useEffect(() => { fetchData(); }, [fetchData]);
 
   const handleGenerate = async () => {
     setGenerating(true);
     try {
-      const res = await request.post('/daily-reports/generate', {
+      const params: any = {
         report_date: selectedDate.format('YYYY-MM-DD'),
         report_type: 'progress',
-      }) as any;
+      };
+      if (ownerFilter && ownerFilter !== 'all') {
+        params.biz_owner = ownerFilter;
+      }
+      const res = await request.post('/daily-reports/generate', params) as any;
       if (res && !res.detail) {
         message.success('日报已生成');
         fetchData();
@@ -135,12 +158,22 @@ const DailyReportsList: React.FC = () => {
   return (
     <div>
       {/* 顶部操作栏 */}
-      <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+      <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div>
           <Title level={2} style={{ margin: 0, fontWeight: 700 }}>招聘日报</Title>
           <Text type="secondary">AI 自动生成每日招聘进展报告</Text>
         </div>
         <Space>
+          <Select
+            value={ownerFilter}
+            onChange={(val) => setOwnerFilter(val)}
+            style={{ width: 160, borderRadius: 8 }}
+            placeholder="筛选负责人"
+            options={[
+              { value: 'all', label: <><TeamOutlined /> 全部负责人</> },
+              ...ownerList.map(o => ({ value: o, label: <><UserOutlined /> {o}</> })),
+            ]}
+          />
           <DatePicker
             value={selectedDate}
             onChange={(d) => d && setSelectedDate(d)}
@@ -154,7 +187,7 @@ const DailyReportsList: React.FC = () => {
             size="large"
             style={{ borderRadius: 8 }}
           >
-            生成日报
+            {ownerFilter !== 'all' ? `生成(${ownerFilter})日报` : '生成日报'}
           </Button>
           <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading} size="large" style={{ borderRadius: 8 }}>
             刷新
