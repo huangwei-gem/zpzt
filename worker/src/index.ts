@@ -3582,9 +3582,44 @@ app.post('/api/resumes/clear-all-except', authMiddleware, async (c) => {
 
 app.delete('/api/resumes/:id', authMiddleware, async (c) => {
   try {
-    const tableId = getBitableTableId(c.env, 'talent');
-    await bitableDeleteRecord(c.env, tableId, c.req.param('id'));
-    return c.json({ detail: 'Deleted' });
+    const id = c.req.param('id');
+    const db = c.env.DB;
+    let deletedFromFeishu = false;
+    let deletedFromD1 = false;
+
+    // 1. 如果是飞书 record_id 格式（以 re 开头），尝试从飞书多维表格删除
+    const isFeishuRecord = /^re/i.test(id);
+    if (isFeishuRecord) {
+      const tableId = getBitableTableId(c.env, 'talent');
+      const ok = await bitableDeleteRecord(c.env, tableId, id);
+      if (ok) {
+        deletedFromFeishu = true;
+      }
+    }
+
+    // 2. 清理 D1 中相关记录
+    try {
+      await db.prepare('DELETE FROM resume_screening_queue WHERE resume_id = ?').bind(id).run();
+    } catch {}
+    try {
+      await db.prepare('DELETE FROM resume_files WHERE id = ?').bind(id).run();
+    } catch {}
+    try {
+      await db.prepare('DELETE FROM resume_extras WHERE feishu_record_id = ?').bind(id).run();
+    } catch {}
+    try {
+      const result = await db.prepare('DELETE FROM resumes WHERE id = ?').bind(id).run();
+      if (result.meta?.changes > 0) {
+        deletedFromD1 = true;
+      }
+    } catch {}
+
+    // 3. 如果既没删飞书也没删 D1，报错
+    if (!deletedFromFeishu && !deletedFromD1) {
+      return c.json({ detail: '删除失败：未找到该简历记录' }, 404);
+    }
+
+    return c.json({ detail: 'Deleted', feishu: deletedFromFeishu, d1: deletedFromD1 });
   } catch (e: any) {
     return c.json({ detail: '删除失败: ' + e.message }, 500);
   }
