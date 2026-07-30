@@ -81,15 +81,6 @@ const bitableCache = new Map<string, { data: any[]; expiry: number }>();
 // 键：UUID → { data: ArrayBuffer, name: string, expiry: number }
 const tempFileStore = new Map<string, { data: ArrayBuffer; name: string; expiry: number }>();
 const TEMP_FILE_TTL = 5 * 60 * 1000; // 5 分钟过期
-// 定期清理过期文件
-if (typeof setInterval !== 'undefined') {
-  setInterval(() => {
-    const now = Date.now();
-    for (const [key, val] of tempFileStore) {
-      if (val.expiry < now) tempFileStore.delete(key);
-    }
-  }, 60_000);
-}
 
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors());
@@ -1390,7 +1381,7 @@ function parseTalentRecord(record: any): any {
     biz_owner: getFirstValue(f['业务负责人']) || '',
     biz_review: getFirstValue(f['业务复核结果']) || '',
     hr_pass_date: f['HR初筛通过日期'] || null,
-    create_time: f['创建时间'] || null,
+    create_time: f['创建时间'] || (record.created_time ? new Date(record.created_time * 1).toISOString().replace('T', ' ').substring(0, 19) : null) || null,
     status: mapHrReviewToStatus(getFirstValue(f['HR复核结果']) || ''),
     match_score: extractScoreFromEval(aiEvalStr),
     feishu_record_id: record.record_id,
@@ -3301,7 +3292,7 @@ app.post('/api/resumes/import-from-feishu', authMiddleware, async (c) => {
           biz_review: bizReview,
           biz_owner: bizOwner,
           hr_pass_date: f['HR初筛通过日期'] || null,
-          create_time: f['创建时间'] || null,
+          create_time: f['创建时间'] || (record.created_time ? new Date(record.created_time * 1).toISOString().replace('T', ' ').substring(0, 19) : null) || null,
           source_id: getFirstValue(f['SourceID']) || '',
         };
 
