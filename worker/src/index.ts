@@ -4351,20 +4351,32 @@ app.get('/api/system/keys', authMiddleware, requireRole(['admin']), async (c) =>
     await c.env.DB.prepare('CREATE TABLE IF NOT EXISTS system_config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT (datetime(\'now\')))').run();
   } catch {}
   const { results } = await c.env.DB.prepare('SELECT key, value, updated_at FROM system_config ORDER BY key').all<{ key: string; value: string; updated_at: string }>();
-  // 返回密钥列表（value 只显示是否已设置，不暴露内容）
   const keys_map: Record<string, string> = {};
   const keys_meta: Record<string, { set: boolean; updated_at: string | null }> = {};
   for (const row of results) {
     keys_map[row.key] = row.value;
     keys_meta[row.key] = { set: true, updated_at: row.updated_at };
   }
-  // 列出所有支持的密钥
+  // 列出所有支持的密钥，从 DB 或 env 获取当前有效值
   const supportedKeys = ['AGNES_API_KEY', 'AGNES_BASE_URL', 'MINERU_API_KEY', 'AI_API_KEY', 'AI_BASE_URL'];
-  const result: Record<string, { set: boolean; updated_at: string | null; last4?: string }> = {};
+  const envMap: Record<string, string | undefined> = {
+    AGNES_API_KEY: c.env.AGNES_API_KEY,
+    AGNES_BASE_URL: c.env.AGNES_BASE_URL,
+    MINERU_API_KEY: c.env.MINERU_API_KEY,
+    AI_API_KEY: c.env.AI_API_KEY,
+    AI_BASE_URL: c.env.AI_BASE_URL,
+  };
+  const result: Record<string, { set: boolean; updated_at: string | null; last4?: string; source?: string }> = {};
   for (const k of supportedKeys) {
+    const dbVal = keys_map[k];
+    const envVal = envMap[k];
+    const effectiveVal = dbVal || envVal || '';
     result[k] = keys_meta[k] || { set: false, updated_at: null };
-    if (keys_map[k]) {
-      result[k].last4 = keys_map[k].slice(-4);
+    if (effectiveVal) {
+      result[k].set = true;
+      result[k].last4 = effectiveVal.slice(-4);
+      if (dbVal) result[k].source = 'db';
+      else if (envVal) result[k].source = 'env';
     }
   }
   return c.json(result);

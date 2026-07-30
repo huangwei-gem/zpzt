@@ -36,6 +36,7 @@ type ApiKeyStatus = {
   set: boolean;
   updated_at: string | null;
   last4?: string;
+  source?: string;
 };
 
 const promptNames: Record<string, string> = {
@@ -196,12 +197,15 @@ const SystemSettingsPage: React.FC = () => {
     try {
       const payload: Record<string, string> = {};
       for (const [k, v] of Object.entries(keyEditValues)) {
-        if (v !== undefined && v !== null) {
+        if (v === '__clear__') {
+          payload[k] = ''; // 空值 = 清除
+        } else if (v !== undefined && v !== null && v !== '') {
           payload[k] = v;
         }
       }
       if (Object.keys(payload).length === 0) {
         message.info('没有要保存的修改');
+        setApiKeysSaving(false);
         return;
       }
       await request.put('/system/keys', payload);
@@ -260,74 +264,85 @@ const SystemSettingsPage: React.FC = () => {
   const apiKeyColumns = [
     {
       title: '密钥名称',
-      dataIndex: 'key',
-      key: 'key',
+      dataIndex: 'name',
+      key: 'name',
       width: 200,
-      render: (k: string) => <Text strong>{API_KEY_LABELS[k] || k}</Text>,
+      render: (name: string) => <Text strong>{API_KEY_LABELS[name] || name}</Text>,
     },
     {
       title: '状态',
       dataIndex: 'key',
       key: 'status',
-      width: 100,
-      render: (k: string) => {
-        const status = apiKeys[k];
-        return status?.set ? <Tag color="green">已设置</Tag> : <Tag color="red">未设置</Tag>;
+      width: 120,
+      render: (_: any, record: { key: string }) => {
+        const status = apiKeys[record.key];
+        if (!status?.set) return <Tag color="red">未设置</Tag>;
+        const tagColor = status.source === 'db' ? 'green' : 'blue';
+        const label = status.source === 'db' ? '已设置' : '环境变量';
+        return <Tag color={tagColor}>{label}</Tag>;
+      },
+    },
+    {
+      title: '来源',
+      key: 'source',
+      width: 80,
+      render: (_: any, record: { key: string }) => {
+        const status = apiKeys[record.key];
+        if (!status?.set) return <Text type="secondary">-</Text>;
+        return status.source === 'db' ? <Text type="secondary">DB</Text> : <Text type="secondary">Env</Text>;
       },
     },
     {
       title: '当前值',
       key: 'current',
       width: 160,
-      render: (_: any, record: string) => {
-        const status = apiKeys[record];
-        if (!status?.set) return <Text type="secondary">-</Text>;
-        if (record.endsWith('_URL')) return <Text type="secondary">已设置</Text>;
+      render: (_: any, record: { key: string }) => {
+        const status = apiKeys[record.key];
+        if (!status?.set) return <Text type="secondary">未配置</Text>;
+        if (record.key.endsWith('_URL')) return <Text type="secondary">已设置</Text>;
         return <Text code>{'****' + (status?.last4 || '')}</Text>;
       },
     },
     {
       title: '新值',
       key: 'edit',
-      render: (_: any, record: string) => {
-        const isUrl = record.endsWith('_URL');
-        const isSet = apiKeys[record]?.set;
-        const showClear = keyEditValues[record] === '__clear__';
-        if (showClear) {
-          return <Button size="small" danger onClick={() => setKeyEditValues(prev => ({ ...prev, [record]: '' }))}>取消清除</Button>;
+      render: (_: any, record: { key: string }) => {
+        const k = record.key;
+        const isUrl = k.endsWith('_URL');
+        const isSet = apiKeys[k]?.set;
+        const clearing = keyEditValues[k] === '__clear__';
+        if (clearing) {
+          return <Button size="small" onClick={() => setKeyEditValues(prev => { const n = { ...prev }; delete n[k]; return n; })}>取消清除</Button>;
         }
         if (isUrl) {
           return (
             <Input
               size="small"
               style={{ width: 300 }}
-              placeholder={API_KEY_PLACEHOLDERS[record] || ''}
-              value={keyEditValues[record] ?? ''}
-              onChange={e => handleKeyValueChange(record, e.target.value)}
+              placeholder={API_KEY_PLACEHOLDERS[k] || ''}
+              value={keyEditValues[k] ?? ''}
+              onChange={e => handleKeyValueChange(k, e.target.value)}
             />
           );
         }
-        const isVisible = visibleKeys[record];
+        const isVisible = visibleKeys[k];
         return (
           <Space>
             <Input
               size="small"
               style={{ width: 280 }}
               type={isVisible ? 'text' : 'password'}
-              placeholder={API_KEY_PLACEHOLDERS[record] || ''}
-              value={keyEditValues[record] ?? ''}
-              onChange={e => handleKeyValueChange(record, e.target.value)}
+              placeholder={API_KEY_PLACEHOLDERS[k] || ''}
+              value={keyEditValues[k] ?? ''}
+              onChange={e => handleKeyValueChange(k, e.target.value)}
             />
             <Button
               size="small"
               icon={isVisible ? <EyeInvisibleOutlined /> : <EyeOutlined />}
-              onClick={() => toggleKeyVisibility(record)}
+              onClick={() => toggleKeyVisibility(k)}
             />
             {isSet && (
-              <Button size="small" danger onClick={() => {
-                handleKeyValueChange(record, '');
-                setKeyEditValues(prev => ({ ...prev, [record]: '__clear__' }));
-              }}>清除</Button>
+              <Button size="small" danger onClick={() => handleKeyValueChange(k, '__clear__')}>清除</Button>
             )}
           </Space>
         );
@@ -335,8 +350,8 @@ const SystemSettingsPage: React.FC = () => {
     },
   ];
 
-  const apiKeyData = ['AGNES_API_KEY', 'AGNES_BASE_URL', 'MINERU_API_KEY', 'AI_API_KEY', 'AI_BASE_URL'];
-  const hasKeyChanges = Object.values(keyEditValues).some(v => v !== undefined && v !== '');
+  const apiKeyData = ['AGNES_API_KEY', 'AGNES_BASE_URL', 'MINERU_API_KEY', 'AI_API_KEY', 'AI_BASE_URL'].map(k => ({ key: k, name: k }));
+  const hasKeyChanges = Object.keys(keyEditValues).length > 0;
 
   // 提示词 Tabs
   const promptTabs = promptConfigs ? Object.keys(promptConfigs.prompts).map(key => ({
@@ -476,7 +491,7 @@ const SystemSettingsPage: React.FC = () => {
         <Table
           dataSource={apiKeyData}
           columns={apiKeyColumns}
-          rowKey={k => k}
+          rowKey={r => r.key}
           pagination={false}
           bordered
           size="small"
