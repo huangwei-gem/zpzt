@@ -3045,8 +3045,8 @@ app.get('/api/resumes', authMiddleware, async (c) => {
           if (!item.create_time && d1.created_at) {
             item.create_time = d1.created_at;
           }
-          // 补充解析状态
-          if (d1.parse_status) {
+          // 补充解析状态（只有终态才覆盖飞书状态，processing 不覆盖以免干扰飞书已有数据）
+          if (d1.parse_status && d1.parse_status !== 'processing') {
             item.parse_status = d1.parse_status;
           }
         }
