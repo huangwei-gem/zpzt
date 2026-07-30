@@ -14,7 +14,7 @@ request.interceptors.request.use(
     }
     // 自动附加全局负责人筛选参数（"/auth/"接口除外)
     const person = sessionStorage.getItem('responsible_person');
-    if (person && !config.url?.includes('/auth/') && !config.url?.includes('/dashboard/')) {
+    if (person && !config.url?.includes('/auth/')) {
       if (!config.params) config.params = {};
       config.params.responsible_person = person;
     }

@@ -901,7 +901,11 @@ app.get('/api/dashboard/funnel', authMiddleware, async (c) => {
 
 app.get('/api/dashboard/positions-detail', authMiddleware, async (c) => {
   const db = c.env.DB;
-  const positions = await db.prepare(`SELECT * FROM positions ORDER BY created_at DESC`).all();
+  const rp = c.req.query('responsible_person');
+  const posSql = rp
+    ? `SELECT * FROM positions WHERE responsible_person = '${rp.replace(/'/g, "''")}' ORDER BY created_at DESC`
+    : `SELECT * FROM positions ORDER BY created_at DESC`;
+  const positions = await db.prepare(posSql).all();
 
   const result = await Promise.all(positions.results.map(async (pos: any) => {
     const [
@@ -978,22 +982,33 @@ app.get('/api/dashboard/interviewers', authMiddleware, async (c) => {
 
 app.get('/api/dashboard/overview', authMiddleware, async (c) => {
   const db = c.env.DB;
+  const rp = c.req.query('responsible_person');
+
+  // 按负责人过滤时拼接额外的 WHERE 条件
+  function posFilter(): string {
+    return rp ? `WHERE status IN ('open','published') AND responsible_person = '${rp.replace(/'/g, "''")}'` : "WHERE status IN ('open','published')";
+  }
+  function subPosFilter(alias?: string): string {
+    const a = alias ? `${alias}.` : '';
+    if (rp) return `${a}position_id IN (SELECT id FROM positions WHERE responsible_person = '${rp.replace(/'/g, "''")}')`;
+    return '1=1';
+  }
 
   // 并行查询所有汇总数据
   const [
     activePos, totalPos, totalResumes, scheduledIvs, completedIvs,
     passedIvs, offersRs, hiredRs, pendingOb, totalOb
   ] = await Promise.all([
-    db.prepare("SELECT COUNT(*) as cnt FROM positions WHERE status IN ('open','published')").first(),
-    db.prepare("SELECT COALESCE(SUM(headcount),0) as cnt FROM positions WHERE status IN ('open','published')").first(),
-    db.prepare("SELECT COUNT(*) as cnt FROM resumes").first(),
-    db.prepare("SELECT COUNT(*) as cnt FROM interviews WHERE status = 'scheduled'").first(),
-    db.prepare("SELECT COUNT(*) as cnt FROM interviews WHERE status = 'completed'").first(),
-    db.prepare("SELECT COUNT(*) as cnt FROM interviews WHERE result = 'pass' OR status2 = 'passed'").first(),
-    db.prepare("SELECT COUNT(*) as cnt FROM offers WHERE status NOT IN ('draft','cancelled')").first(),
-    db.prepare("SELECT COUNT(*) as cnt FROM onboarding_records WHERE status = 'onboarded'").first(),
-    db.prepare("SELECT COUNT(*) as cnt FROM onboarding_records WHERE status = 'pending'").first(),
-    db.prepare("SELECT COUNT(*) as cnt FROM onboarding_records").first(),
+    db.prepare(`SELECT COUNT(*) as cnt FROM positions ${posFilter()}`).first(),
+    db.prepare(`SELECT COALESCE(SUM(headcount),0) as cnt FROM positions ${posFilter()}`).first(),
+    db.prepare(`SELECT COUNT(*) as cnt FROM resumes WHERE ${subPosFilter()}`).first(),
+    db.prepare(`SELECT COUNT(*) as cnt FROM interviews WHERE status = 'scheduled' AND ${subPosFilter()}`).first(),
+    db.prepare(`SELECT COUNT(*) as cnt FROM interviews WHERE status = 'completed' AND ${subPosFilter()}`).first(),
+    db.prepare(`SELECT COUNT(*) as cnt FROM interviews WHERE (result = 'pass' OR status2 = 'passed') AND ${subPosFilter()}`).first(),
+    db.prepare(`SELECT COUNT(*) as cnt FROM offers WHERE status NOT IN ('draft','cancelled') AND ${subPosFilter()}`).first(),
+    db.prepare(`SELECT COUNT(*) as cnt FROM onboarding_records WHERE status = 'onboarded' AND ${subPosFilter()}`).first(),
+    db.prepare(`SELECT COUNT(*) as cnt FROM onboarding_records WHERE status = 'pending' AND ${subPosFilter()}`).first(),
+    db.prepare(`SELECT COUNT(*) as cnt FROM onboarding_records WHERE ${subPosFilter()}`).first(),
   ]);
 
   const ap = activePos?.cnt || 0;
@@ -1071,6 +1086,10 @@ app.get('/api/dashboard/timeline', authMiddleware, async (c) => {
 // 模块指标聚合 API（按侧边菜单模块统计各自核心数量）
 app.get('/api/dashboard/module-stats', authMiddleware, async (c) => {
   const db = c.env.DB;
+  const rp = c.req.query('responsible_person');
+  const posIdsSql = rp ? `SELECT id FROM positions WHERE responsible_person = '${rp.replace(/'/g, "''")}'` : null;
+  const posFilter = posIdsSql ? `position_id IN (${posIdsSql})` : '1=1';
+  const posIdsFilter = posIdsSql ? `id IN (${posIdsSql})` : '1=1';
   const [
     reqCnt, reqPending, reqApproved,
     tpCnt,
@@ -1085,20 +1104,20 @@ app.get('/api/dashboard/module-stats', authMiddleware, async (c) => {
     db.prepare("SELECT COUNT(*) as c FROM job_requisitions WHERE status='pending'").first().catch(() => ({c:0})),
     db.prepare("SELECT COUNT(*) as c FROM job_requisitions WHERE status='approved'").first().catch(() => ({c:0})),
     db.prepare("SELECT COUNT(*) as c FROM resume_screening_queue WHERE status='approved'").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM positions").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM positions WHERE status IN ('open','published')").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM positions WHERE status='open'").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM resumes").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM resumes WHERE status LIKE 'pending%' OR status='new'").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM resumes WHERE status='screening'").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM interviews").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM interviews WHERE status='scheduled'").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM interviews WHERE date(interview_time)=date('now')").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM onboarding_records").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM onboarding_records WHERE status='pending'").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM onboarding_records WHERE status='onboarded'").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM probation_records").first().catch(() => ({c:0})),
-    db.prepare("SELECT COUNT(*) as c FROM probation_records WHERE status='active' OR status='probation'").first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM positions WHERE ${posIdsFilter}`).first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM positions WHERE status IN ('open','published') AND ${posIdsFilter}`).first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM positions WHERE status='open' AND ${posIdsFilter}`).first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM resumes WHERE ${posFilter}`).first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM resumes WHERE (status LIKE 'pending%' OR status='new') AND ${posFilter}`).first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM resumes WHERE status='screening' AND ${posFilter}`).first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM interviews WHERE ${posFilter}`).first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM interviews WHERE status='scheduled' AND ${posFilter}`).first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM interviews WHERE date(interview_time)=date('now') AND ${posFilter}`).first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM onboarding_records WHERE ${posFilter}`).first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM onboarding_records WHERE status='pending' AND ${posFilter}`).first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM onboarding_records WHERE status='onboarded' AND ${posFilter}`).first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM probation_records WHERE ${posFilter}`).first().catch(() => ({c:0})),
+    db.prepare(`SELECT COUNT(*) as c FROM probation_records WHERE (status='active' OR status='probation') AND ${posFilter}`).first().catch(() => ({c:0})),
     db.prepare("SELECT COUNT(*) as c FROM users WHERE is_active=1").first().catch(() => ({c:0})),
     db.prepare("SELECT COUNT(*) as c FROM users WHERE role='interviewer' AND is_active=1").first().catch(() => ({c:0})),
   ]);
@@ -1113,6 +1132,7 @@ app.get('/api/dashboard/module-stats', authMiddleware, async (c) => {
       { key:'probation',           label:'试用期管理',       count: probCnt?.c||0, sub:`进行中 ${probActive?.c||0}` },
       { key:'users',               label:'用户管理',         count: userCnt?.c||0, sub:`面试官 ${interviewerCnt?.c||0}` },
     ],
+    filters: rp ? { responsible_person: rp } : undefined,
   });
 });
 
@@ -2866,7 +2886,7 @@ app.post('/api/resumes', authMiddleware, async (c) => {
             extraInfo,
           ].filter(Boolean).join('\n');
 
-          const systemPrompt = `你是一位资深招聘专家和简历解析助手。请解析以下简历文本，提取完整信息并进行AI初筛评估。返回JSON格式（不要加markdown代码块），包含两部分：
+          const systemPrompt = `你是一位资深招聘专家和简历解析助手。请解析以下简历文本，提取完整信息并进行AI初筛评估。返回JSON格式（不要加markdown代码块），包含三部分：
 
 第一部分 - 基础信息：
 - candidate_name: 候选人姓名（全名）
@@ -4189,7 +4209,7 @@ app.post('/api/resumes/:id/reparse', authMiddleware, async (c) => {
     userPrompt = up;
   } else {
     // 默认配置（中文增强版）
-    systemPrompt = `你是一位资深招聘专家和简历解析助手。请解析以下简历文本，提取完整信息并进行AI初筛评估。返回JSON格式（不要加markdown代码块），包含两部分：
+    systemPrompt = `你是一位资深招聘专家和简历解析助手。请解析以下简历文本，提取完整信息并进行AI初筛评估。返回JSON格式（不要加markdown代码块），包含三部分：
 
 第一部分 - 基础信息：
 - candidate_name: 候选人姓名（全名）
@@ -4224,7 +4244,27 @@ app.post('/api/resumes/:id/reparse', authMiddleware, async (c) => {
 - personalized_met_items: 已满足的个性化需求列表（数组），逐条描述
 - personalized_unmet_items: 未满足的个性化需求列表（数组），逐条说明缺少或不符合的内容
   **注意**：如果个性化需求有要求但候选人完全不满足，personalized_match_score 设为较低分数（如0-20），unmet_items 详细列出未满足项。个性化需求的匹配是评估的重点，如果未满足必须在 unmet_items 中明确指出。`;
-    userPrompt = '简历文本（请提取完整信息）：\n' + rawText;
+    // 从简历数据获取岗位信息，传入 prompt 以便 AI 评估个性化需求
+    let positionReq = null;
+    const positionName = resume.position_applied || resume.position_id || '';
+    if (positionName) {
+      try { positionReq = await getPositionRequirements(c.env, positionName); } catch {}
+    }
+    let positionSections = '';
+    if (positionReq) {
+      const dimsText = (positionReq.capability_dimensions || []).map((d: any) =>
+        `  - ${d.name}${d.description ? `：${d.description}` : ''}`
+      ).join('\n');
+      positionSections = [
+        '',
+        `【应聘岗位：${positionReq.positionTitle}】`,
+        positionReq.description ? `\n岗位职责：\n${positionReq.description}` : '',
+        positionReq.requirements ? `\n岗位要求：\n${positionReq.requirements}` : '',
+        positionReq.personalized_requirements ? `\n个性化要求：\n${positionReq.personalized_requirements}` : '',
+        dimsText ? `\n能力维度（需要逐项评估）：\n${dimsText}` : '',
+      ].filter(Boolean).join('\n');
+    }
+    userPrompt = ['简历文本（请提取完整信息）：\n' + rawText, positionSections].filter(Boolean).join('\n');
   }
   try {
     const result = await callAI(c.env, systemPrompt, userPrompt);
@@ -8001,7 +8041,7 @@ function buildAIScreeningPrompt(resumeText: string, positionReq: any | null, ext
     }
   }
 
-  const systemPrompt = `你是一位资深招聘专家和简历解析助手。请解析以下简历文本，提取完整信息并进行AI初筛评估。返回JSON格式（不要加markdown代码块），包含两部分：
+  const systemPrompt = `你是一位资深招聘专家和简历解析助手。请解析以下简历文本，提取完整信息并进行AI初筛评估。返回JSON格式（不要加markdown代码块），包含三部分：
 
 第一部分 - 基础信息：
 - candidate_name: 候选人姓名（全名）
@@ -8290,7 +8330,7 @@ app.post('/api/resumes/fix-incomplete-evaluations', authMiddleware, requireRole(
           if (sp.includes('{resume_text}')) sp = sp.replace(/\{resume_text\}/g, resumeText);
           systemPrompt = sp; userPrompt = up;
         } else {
-          systemPrompt = `你是一位资深招聘专家和简历解析助手。请解析以下简历文本，提取完整信息并进行AI初筛评估。返回JSON格式（不要加markdown代码块），包含两部分：
+          systemPrompt = `你是一位资深招聘专家和简历解析助手。请解析以下简历文本，提取完整信息并进行AI初筛评估。返回JSON格式（不要加markdown代码块），包含三部分：
 
 第一部分 - 基础信息：
 - candidate_name: 候选人姓名
@@ -8318,8 +8358,30 @@ app.post('/api/resumes/fix-incomplete-evaluations', authMiddleware, requireRole(
 - match_score: 人岗匹配度（0-100整数）
 - recommendation: 推荐建议
 - summary: 综合分析摘要（中文，2-3句话）
-- suggested_questions: 建议面试问题（中文，3-5个）`;
-          userPrompt = '简历文本：\n' + resumeText;
+- suggested_questions: 建议面试问题（中文，3-5个）
+
+第三部分 - 个性化需求匹配（如果岗位有个性化需求，这是重点评估部分！）：
+- personalized_match_score: 个性化需求匹配度（0-100整数）
+- personalized_met_items: 已满足的个性化需求列表（数组）
+- personalized_unmet_items: 未满足的个性化需求列表（数组）`;
+          // 获取岗位信息（含个性化需求）
+          let positionReq = null;
+          if (position) { try { positionReq = await getPositionRequirements(c.env, position); } catch {} }
+          let positionSections = '';
+          if (positionReq) {
+            const dimsText = (positionReq.capability_dimensions || []).map((d: any) =>
+              `  - ${d.name}${d.description ? `：${d.description}` : ''}`
+            ).join('\n');
+            positionSections = [
+              '',
+              `【应聘岗位：${positionReq.positionTitle}】`,
+              positionReq.description ? `\n岗位职责：\n${positionReq.description}` : '',
+              positionReq.requirements ? `\n岗位要求：\n${positionReq.requirements}` : '',
+              positionReq.personalized_requirements ? `\n个性化要求：\n${positionReq.personalized_requirements}` : '',
+              dimsText ? `\n能力维度（需要逐项评估）：\n${dimsText}` : '',
+            ].filter(Boolean).join('\n');
+          }
+          userPrompt = ['简历文本：\n' + resumeText, positionSections].filter(Boolean).join('\n');
         }
 
         const result = await callAI(c.env, systemPrompt, userPrompt);
