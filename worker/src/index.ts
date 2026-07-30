@@ -82,6 +82,38 @@ const bitableCache = new Map<string, { data: any[]; expiry: number }>();
 const tempFileStore = new Map<string, { data: ArrayBuffer; name: string; expiry: number }>();
 const TEMP_FILE_TTL = 5 * 60 * 1000; // 5 分钟过期
 
+// ==================== 系统密钥管理（DB 持久化，支持通过前端页面配置）====================
+// 优先级：DB 配置表 system_config > 环境变量(env) > 硬编码 fallback
+// 使用内存缓存避免每次请求都查 DB
+let systemKeysCache: Record<string, string> | null = null;
+let systemKeysCacheTs = 0;
+const SYSTEM_KEYS_TTL = 30_000;
+
+async function loadSystemKeys(env: Env): Promise<Record<string, string>> {
+  const now = Date.now();
+  if (systemKeysCache && now - systemKeysCacheTs < SYSTEM_KEYS_TTL) {
+    return systemKeysCache;
+  }
+  try {
+    const { results } = await env.DB.prepare('SELECT key, value FROM system_config').all<{ key: string; value: string }>();
+    const config: Record<string, string> = {};
+    for (const row of results) {
+      config[row.key] = row.value;
+    }
+    systemKeysCache = config;
+    systemKeysCacheTs = now;
+    return config;
+  } catch {
+    systemKeysCache = {};
+    systemKeysCacheTs = now;
+    return {};
+  }
+}
+
+function resolveKey(keys: Record<string, string>, key: string, envVal?: string): string {
+  return keys[key] || envVal || '';
+}
+
 const app = new Hono<{ Bindings: Env }>();
 app.use('*', cors());
 
@@ -149,10 +181,13 @@ const PDF_D1_STORAGE_LIMIT = 500000;
 
 // ==================== MinerU PDF 文本提取（v4 API）====================
 const MINERU_BASE_URL = 'https://mineru.net';
-// MinerU API Key 从环境变量读取，如果未设置则尝试硬编码值（降级兼容）
-function getMineruApiKey(env?: any): string {
-  if (env?.MINERU_API_KEY) return env.MINERU_API_KEY;
-  return ''; // 未配置时跳过 MinerU
+// MinerU API Key 优先从 DB（system_config 表）读取，其次环境变量
+async function getMineruApiKey(env: Env): Promise<string> {
+  try {
+    const keys = await loadSystemKeys(env);
+    if (keys['MINERU_API_KEY']) return keys['MINERU_API_KEY'];
+  } catch {}
+  return env?.MINERU_API_KEY || '';
 }
 
 /**
@@ -297,13 +332,15 @@ async function verifyPassword(secretKey: string, password: string, hash: string)
 // Agnes AI（agnes-25-flash）调用 —— OpenAI 兼容接口
 // 文档：https://www.agnes-ai.com/zh-Hans/docs/agnes-25-flash
 // AGNES_BASE_URL 默认 https://api.agnes-ai.com/v1，端点 /chat/completions
-async function callAgnes(env: Env, systemPrompt: string, userPrompt: string, model: string = 'agnes-25-flash'): Promise<string> {
-  const baseUrl = (env.AGNES_BASE_URL || 'https://api.agnes-ai.com/v1').replace(/\/+$/, '');
+async function callAgnes(env: Env, systemPrompt: string, userPrompt: string, model: string = 'agnes-25-flash', dbKeys?: Record<string, string>): Promise<string> {
+  const keys = dbKeys || await loadSystemKeys(env);
+  const apiKey = resolveKey(keys, 'AGNES_API_KEY', env.AGNES_API_KEY);
+  const baseUrl = (resolveKey(keys, 'AGNES_BASE_URL') || env.AGNES_BASE_URL || 'https://api.agnes-ai.com/v1').replace(/\/+$/, '');
   const resp = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${env.AGNES_API_KEY}`,
+      'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model,
@@ -342,28 +379,33 @@ async function getCustomPrompt(env: Env, key: string): Promise<{ system: string;
 }
 
 async function callAI(env: Env, systemPrompt: string, userPrompt: string, model?: string): Promise<string> {
+  const keys = await loadSystemKeys(env);
+  const agnesKey = resolveKey(keys, 'AGNES_API_KEY', env.AGNES_API_KEY);
+  const deepseekKey = resolveKey(keys, 'AI_API_KEY', env.AI_API_KEY);
+  const deepseekBaseUrl = resolveKey(keys, 'AI_BASE_URL') || env.AI_BASE_URL || 'https://api.deepseek.com';
+
   // 优先使用 Agnes AI（https://www.agnes-ai.com/，agnes-25-flash）
   // 失败时降级 DeepSeek，再降级 Cloudflare Workers AI。
-  if (env.AGNES_API_KEY) {
+  if (agnesKey) {
     const agnesModel = model && model !== 'deepseek-chat' && model !== 'deepseek-v4-flash'
       ? model
       : 'agnes-25-flash';
     try {
-      return await callAgnes(env, systemPrompt, userPrompt, agnesModel);
+      return await callAgnes(env, systemPrompt, userPrompt, agnesModel, keys);
     } catch (e: any) {
       console.warn(`[AI] Agnes 失败，降级 DeepSeek: ${e.message}`);
     }
   }
 
   // 备选：DeepSeek（或兼容的 OpenAI API）
-  if (env.AI_API_KEY) {
-    const baseUrl = (env.AI_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
+  if (deepseekKey) {
+    const baseUrl = deepseekBaseUrl.replace(/\/+$/, '');
     const deepseekModel = model === 'deepseek-v4-flash' ? 'deepseek-chat' : (model || 'deepseek-chat');
     const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${env.AI_API_KEY}`,
+        'Authorization': `Bearer ${deepseekKey}`,
       },
       body: JSON.stringify({
         model: deepseekModel,
@@ -470,8 +512,12 @@ function uuid(): string {
   return crypto.randomUUID();
 }
 
+/** Asia/Shanghai (UTC+8) 当前时间，返回 "YYYY-MM-DD HH:mm:ss" 格式 */
 function now(): string {
-  return new Date().toISOString();
+  const d = new Date();
+  // toISOString 返回 UTC 时间，加 8 小时得到东八区时间
+  const utc8 = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  return utc8.toISOString().replace('T', ' ').substring(0, 19);
 }
 
 // ==================== Auth Middleware ====================
@@ -3788,7 +3834,7 @@ app.post('/api/resumes/:id/approve-to-talent-pool', authMiddleware, async (c) =>
   await bitableUpdateRecord(c.env, talentTableId, id, { 'HR复核结果': '通过' });
 
   // 同步更新 D1，使面试流水线能查到
-  const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const t = now();
   try {
     const existingResume = await c.env.DB.prepare('SELECT * FROM resumes WHERE id = ?').bind(id).first();
     const f = record.fields || {};
@@ -3811,12 +3857,12 @@ app.post('/api/resumes/:id/approve-to-talent-pool', authMiddleware, async (c) =>
     if (existingResume) {
       await c.env.DB.prepare(
         "UPDATE resumes SET status = 'approved', parsed_data = ?, created_at = ?, candidate_name = ? WHERE id = ?"
-      ).bind(JSON.stringify(parsedData), now, candidateName, id).run();
+      ).bind(JSON.stringify(parsedData), t, candidateName, id).run();
     } else {
       await c.env.DB.prepare(
         `INSERT INTO resumes (id, candidate_name, status, hr_review, raw_text, created_at, parsed_data)
          VALUES (?, ?, 'approved', ?, ?, ?, ?)`
-      ).bind(id, candidateName, hrResult, advantage + '\n' + risk, now, JSON.stringify(parsedData)).run();
+      ).bind(id, candidateName, hrResult, advantage + '\n' + risk, t, JSON.stringify(parsedData)).run();
     }
   } catch (e: any) {
     console.error(`[ApproveToTalentPool] D1 同步失败: ${e.message}`);
@@ -4295,6 +4341,55 @@ app.get('/api/settings/mail', authMiddleware, async (c) => {
 
 app.put('/api/settings/mail', authMiddleware, async (c) => {
   return c.json({ detail: 'Mail settings updated' });
+});
+
+// ==================== 系统密钥管理（DB 持久化，可从前端配置）====================
+
+app.get('/api/system/keys', authMiddleware, requireRole(['admin']), async (c) => {
+  // 确保表存在
+  try {
+    await c.env.DB.prepare('CREATE TABLE IF NOT EXISTS system_config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT (datetime(\'now\')))').run();
+  } catch {}
+  const { results } = await c.env.DB.prepare('SELECT key, value, updated_at FROM system_config ORDER BY key').all<{ key: string; value: string; updated_at: string }>();
+  // 返回密钥列表（value 只显示是否已设置，不暴露内容）
+  const keys_map: Record<string, string> = {};
+  const keys_meta: Record<string, { set: boolean; updated_at: string | null }> = {};
+  for (const row of results) {
+    keys_map[row.key] = row.value;
+    keys_meta[row.key] = { set: true, updated_at: row.updated_at };
+  }
+  // 列出所有支持的密钥
+  const supportedKeys = ['AGNES_API_KEY', 'AGNES_BASE_URL', 'MINERU_API_KEY', 'AI_API_KEY', 'AI_BASE_URL'];
+  const result: Record<string, { set: boolean; updated_at: string | null; last4?: string }> = {};
+  for (const k of supportedKeys) {
+    result[k] = keys_meta[k] || { set: false, updated_at: null };
+    if (keys_map[k]) {
+      result[k].last4 = keys_map[k].slice(-4);
+    }
+  }
+  return c.json(result);
+});
+
+app.put('/api/system/keys', authMiddleware, requireRole(['admin']), async (c) => {
+  try {
+    await c.env.DB.prepare('CREATE TABLE IF NOT EXISTS system_config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT (datetime(\'now\')))').run();
+  } catch {}
+  const body = await c.req.json() as Record<string, string>;
+  const supportedKeys = ['AGNES_API_KEY', 'AGNES_BASE_URL', 'MINERU_API_KEY', 'AI_API_KEY', 'AI_BASE_URL'];
+  for (const [k, v] of Object.entries(body)) {
+    if (!supportedKeys.includes(k)) continue;
+    if (!v || !v.trim()) {
+      // 空值 = 删除该配置
+      await c.env.DB.prepare('DELETE FROM system_config WHERE key = ?').bind(k).run();
+    } else {
+      await c.env.DB.prepare(
+        'INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
+      ).bind(k, v.trim(), now()).run();
+    }
+  }
+  // 清除缓存
+  systemKeysCache = null;
+  return c.json({ ok: true });
 });
 
 app.get('/api/settings/prompts', authMiddleware, async (c) => {

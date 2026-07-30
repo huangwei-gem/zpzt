@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Card, Form, Input, Space, Typography, message, Divider, Tag, Tabs, Tooltip } from 'antd';
-import { SaveOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Button, Card, Form, Input, Space, Typography, message, Divider, Tag, Tabs, Tooltip, Table, Modal } from 'antd';
+import { SaveOutlined, ReloadOutlined, KeyOutlined, EyeInvisibleOutlined, EyeOutlined } from '@ant-design/icons';
 import request from '../../utils/request';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -32,6 +32,12 @@ type PromptVariablesResponse = {
   all_variables: Record<string, string>;
 };
 
+type ApiKeyStatus = {
+  set: boolean;
+  updated_at: string | null;
+  last4?: string;
+};
+
 const promptNames: Record<string, string> = {
   generate_jd: 'JD 生成',
   analyze_resume: '简历分析',
@@ -43,6 +49,22 @@ const promptNames: Record<string, string> = {
   generate_coding_test_evaluation: '笔试代码评价',
 };
 
+const API_KEY_LABELS: Record<string, string> = {
+  AGNES_API_KEY: 'Agnes AI 密钥',
+  AGNES_BASE_URL: 'Agnes API 地址',
+  MINERU_API_KEY: 'MinerU PDF 解析密钥',
+  AI_API_KEY: 'DeepSeek/AI 备用密钥',
+  AI_BASE_URL: 'DeepSeek API 地址',
+};
+
+const API_KEY_PLACEHOLDERS: Record<string, string> = {
+  AGNES_API_KEY: 'sk-... 设置后不会回显',
+  AGNES_BASE_URL: 'https://api.agnes-ai.com/v1',
+  MINERU_API_KEY: 'sk-... 设置后不会回显',
+  AI_API_KEY: 'sk-... 设置后不会回显',
+  AI_BASE_URL: 'https://api.deepseek.com',
+};
+
 const SystemSettingsPage: React.FC = () => {
   const { user } = useAuth();
   const [form] = Form.useForm();
@@ -51,6 +73,13 @@ const SystemSettingsPage: React.FC = () => {
   const [meta, setMeta] = useState<SystemSettings | null>(null);
   const [editingKey, setEditingKey] = useState(false);
   const role = (user as any)?.role?.value ?? (user as any)?.role;
+
+  // API 密钥管理
+  const [apiKeys, setApiKeys] = useState<Record<string, ApiKeyStatus>>({});
+  const [apiKeysLoading, setApiKeysLoading] = useState(false);
+  const [apiKeysSaving, setApiKeysSaving] = useState(false);
+  const [keyEditValues, setKeyEditValues] = useState<Record<string, string>>({});
+  const [visibleKeys, setVisibleKeys] = useState<Record<string, boolean>>({});
 
   // 提示词配置
   const [promptLoading, setPromptLoading] = useState(false);
@@ -78,6 +107,19 @@ const SystemSettingsPage: React.FC = () => {
       else message.error('获取系统设置失败');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchApiKeys = async () => {
+    setApiKeysLoading(true);
+    try {
+      const res = (await request.get('/system/keys')) as Record<string, ApiKeyStatus>;
+      setApiKeys(res);
+      setKeyEditValues({});
+    } catch {
+      message.error('获取密钥状态失败');
+    } finally {
+      setApiKeysLoading(false);
     }
   };
 
@@ -110,6 +152,7 @@ const SystemSettingsPage: React.FC = () => {
   useEffect(() => {
     if (role !== 'admin') return;
     fetchSettings();
+    fetchApiKeys();
     fetchPromptConfigs();
     fetchPromptVariables();
   }, [role]);
@@ -148,6 +191,30 @@ const SystemSettingsPage: React.FC = () => {
     }
   };
 
+  const handleSaveApiKeys = async () => {
+    setApiKeysSaving(true);
+    try {
+      const payload: Record<string, string> = {};
+      for (const [k, v] of Object.entries(keyEditValues)) {
+        if (v !== undefined && v !== null) {
+          payload[k] = v;
+        }
+      }
+      if (Object.keys(payload).length === 0) {
+        message.info('没有要保存的修改');
+        return;
+      }
+      await request.put('/system/keys', payload);
+      setKeyEditValues({});
+      await fetchApiKeys();
+      message.success('密钥已保存');
+    } catch {
+      message.error('保存密钥失败');
+    } finally {
+      setApiKeysSaving(false);
+    }
+  };
+
   const handleSavePrompt = async () => {
     try {
       const values = await promptForm.validateFields();
@@ -173,6 +240,14 @@ const SystemSettingsPage: React.FC = () => {
     promptForm.setFieldsValue({ user: currentValue + variableText });
   };
 
+  const handleKeyValueChange = (key: string, value: string) => {
+    setKeyEditValues(prev => ({ ...prev, [key]: value }));
+  };
+
+  const toggleKeyVisibility = (key: string) => {
+    setVisibleKeys(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
   if (role !== 'admin') {
     return (
       <div style={{ padding: 40, textAlign: 'center' }}>
@@ -180,6 +255,88 @@ const SystemSettingsPage: React.FC = () => {
       </div>
     );
   }
+
+  // API 密钥表格列
+  const apiKeyColumns = [
+    {
+      title: '密钥名称',
+      dataIndex: 'key',
+      key: 'key',
+      width: 200,
+      render: (k: string) => <Text strong>{API_KEY_LABELS[k] || k}</Text>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'key',
+      key: 'status',
+      width: 100,
+      render: (k: string) => {
+        const status = apiKeys[k];
+        return status?.set ? <Tag color="green">已设置</Tag> : <Tag color="red">未设置</Tag>;
+      },
+    },
+    {
+      title: '当前值',
+      key: 'current',
+      width: 160,
+      render: (_: any, record: string) => {
+        const status = apiKeys[record];
+        if (!status?.set) return <Text type="secondary">-</Text>;
+        if (record.endsWith('_URL')) return <Text type="secondary">已设置</Text>;
+        return <Text code>{'****' + (status?.last4 || '')}</Text>;
+      },
+    },
+    {
+      title: '新值',
+      key: 'edit',
+      render: (_: any, record: string) => {
+        const isUrl = record.endsWith('_URL');
+        const isSet = apiKeys[record]?.set;
+        const showClear = keyEditValues[record] === '__clear__';
+        if (showClear) {
+          return <Button size="small" danger onClick={() => setKeyEditValues(prev => ({ ...prev, [record]: '' }))}>取消清除</Button>;
+        }
+        if (isUrl) {
+          return (
+            <Input
+              size="small"
+              style={{ width: 300 }}
+              placeholder={API_KEY_PLACEHOLDERS[record] || ''}
+              value={keyEditValues[record] ?? ''}
+              onChange={e => handleKeyValueChange(record, e.target.value)}
+            />
+          );
+        }
+        const isVisible = visibleKeys[record];
+        return (
+          <Space>
+            <Input
+              size="small"
+              style={{ width: 280 }}
+              type={isVisible ? 'text' : 'password'}
+              placeholder={API_KEY_PLACEHOLDERS[record] || ''}
+              value={keyEditValues[record] ?? ''}
+              onChange={e => handleKeyValueChange(record, e.target.value)}
+            />
+            <Button
+              size="small"
+              icon={isVisible ? <EyeInvisibleOutlined /> : <EyeOutlined />}
+              onClick={() => toggleKeyVisibility(record)}
+            />
+            {isSet && (
+              <Button size="small" danger onClick={() => {
+                handleKeyValueChange(record, '');
+                setKeyEditValues(prev => ({ ...prev, [record]: '__clear__' }));
+              }}>清除</Button>
+            )}
+          </Space>
+        );
+      },
+    },
+  ];
+
+  const apiKeyData = ['AGNES_API_KEY', 'AGNES_BASE_URL', 'MINERU_API_KEY', 'AI_API_KEY', 'AI_BASE_URL'];
+  const hasKeyChanges = Object.values(keyEditValues).some(v => v !== undefined && v !== '');
 
   // 提示词 Tabs
   const promptTabs = promptConfigs ? Object.keys(promptConfigs.prompts).map(key => ({
@@ -226,10 +383,10 @@ const SystemSettingsPage: React.FC = () => {
     <div>
       <div style={{ marginBottom: 32 }}>
         <Title level={2} style={{ margin: 0 }}>系统设置</Title>
-        <Text type="secondary">配置 AI 模型参数与提示词模板</Text>
+        <Text type="secondary">配置 AI 模型参数、API 密钥与提示词模板</Text>
       </div>
 
-      {/* 模型配置 */}
+      {/* AI 模型配置 */}
       <Card
         title="AI 模型配置"
         style={{ marginBottom: 24 }}
@@ -291,6 +448,39 @@ const SystemSettingsPage: React.FC = () => {
             />
           </Form.Item>
         </Form>
+      </Card>
+
+      {/* API 密钥管理 */}
+      <Card
+        title={<Space><KeyOutlined />API 密钥管理</Space>}
+        style={{ marginBottom: 24 }}
+        loading={apiKeysLoading}
+        extra={
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={fetchApiKeys}>刷新</Button>
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              onClick={handleSaveApiKeys}
+              loading={apiKeysSaving}
+              disabled={!hasKeyChanges}
+            >
+              保存密钥
+            </Button>
+          </Space>
+        }
+      >
+        <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+          配置各 API 服务的密钥，保存后立即生效。密钥存储在数据库中，不会在页面回显完整值。
+        </Text>
+        <Table
+          dataSource={apiKeyData}
+          columns={apiKeyColumns}
+          rowKey={k => k}
+          pagination={false}
+          bordered
+          size="small"
+        />
       </Card>
 
       {/* 提示词配置 */}
