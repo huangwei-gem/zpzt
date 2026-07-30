@@ -1520,16 +1520,17 @@ interface FilenameParsedInfo {
 function parseFilenameInfo(name: string): FilenameParsedInfo {
   const empty = { position: null, location: null, salary: null, cleanName: null, metaInfo: '' };
   if (!name) return empty;
-  // 匹配 【岗位_地点_薪资】姓名_年限
-  const match = name.match(/【([^】]+)】\s*(.+)/);
-  if (match) {
-    const inside = match[1];           // 社群用户运营专员_杭州_6-8K
-    const after = match[2];            // 卢俊蕾_一年以内
+  const cleanName_ = name.replace(/\.pdf$/i, '').trim();
+
+  // 格式1： 【岗位_地点_薪资】姓名_年限
+  const bracketMatch = cleanName_.match(/【([^】]+)】\s*(.+)/);
+  if (bracketMatch) {
+    const inside = bracketMatch[1];
+    const after = bracketMatch[2];
     const parts = inside.split('_');
     const position = parts[0]?.trim() || null;
     const location = parts[1]?.trim() || null;
     const salary = parts[2]?.trim() || null;
-    // 解析名字和年限
     let cleanName: string | null = null;
     let metaInfo = '';
     if (after) {
@@ -1541,6 +1542,41 @@ function parseFilenameInfo(name: string): FilenameParsedInfo {
     }
     return { position, location, salary, cleanName, metaInfo };
   }
+
+  // 格式2： 岗位_方向__城市_薪资_姓名_年限  (带__或多个_分隔)
+  // 从后往前解析：最后一段是年限，倒数第二段是姓名，前面的都是岗位/地点/薪资信息
+  // 例如：劳动者运营实习生_家政业务方向__长沙_100-150元_天_温美华_一年以内
+  const underscoreParts = cleanName_.split('_').filter((p: string) => p.length > 0);
+  if (underscoreParts.length >= 4) {
+    // 最后一段 = 年限/元信息
+    const metaInfo = underscoreParts[underscoreParts.length - 1] || '';
+    // 倒数第二段 = 姓名
+    const cleanName = underscoreParts[underscoreParts.length - 2] || null;
+    // 前面的部分尝试匹配 薪资→城市→方向→岗位
+    // 找到带"元"或数字+薪资的部分
+    let salary: string | null = null;
+    let location: string | null = null;
+    let positionParts: string[] = [];
+    let foundSalary = false;
+    for (let i = 0; i < underscoreParts.length - 2; i++) {
+      const p = underscoreParts[i];
+      // 薪资判断：包含"元"或"K"或数字开头带-
+      if (/[元Kk]/.test(p) || /^\d/.test(p)) {
+        salary = p;
+        foundSalary = true;
+        continue;
+      }
+      // 地点判断：常见城市名（如长沙/杭州/北京等）
+      if (!foundSalary && /^(长沙|杭州|北京|上海|广州|深圳|成都|武汉|南京|苏州|天津|重庆|西安|宁波|厦门|福州|合肥|郑州|青岛|济南|大连|昆明|贵阳|南宁|海口|沈阳|长春|哈尔滨|石家庄|太原|呼和浩特|乌鲁木齐|兰州|银川|西宁|拉萨|东莞|佛山|珠海|惠州|中山|温州|绍兴|嘉兴|南通|无锡|常州|徐州|南昌|九江|宜昌|襄阳|洛阳|唐山|秦皇岛|珠海)$/.test(p)) {
+        location = p;
+        continue;
+      }
+      positionParts.push(p);
+    }
+    const position = positionParts.length > 0 ? positionParts.join('_') : null;
+    return { position, location, salary, cleanName, metaInfo };
+  }
+
   return empty;
 }
 
@@ -2764,30 +2800,85 @@ app.post('/api/resumes', authMiddleware, async (c) => {
             } catch {}
           }
 
-          // 用 DeepSeek 做结构化解析
-          const parsePrompt = `你是一个专业的简历解析助手。{candidate_name}的简历文本如下，请从中提取完整字段并以JSON返回。`;
-          const systemPrompt = `你是一个专业的简历解析助手。请从简历文本中提取以下所有信息，并用JSON格式返回（不要加markdown代码块）。尽可能提取每个字段，找不到的字段设为null或空字符串。
+          // 从文件名解析岗位信息
+          const filenameInfo = parseFilenameInfo(file.name);
+          const detectedPosition = filenameInfo.position || fields['面试岗位'] || '';
 
-{
-  "name": "候选人姓名",
-  "gender": "性别（男/女）",
-  "age": 年龄数字或null,
-  "phone": "手机号码",
-  "email": "电子邮箱",
-  "education": "最高学历（如：本科/硕士/博士）",
-  "school": "毕业院校",
-  "major": "专业",
-  "city": "所在城市",
-  "work_years": "工作年限（数字）",
-  "skills": ["技能1", "技能2", "技能3", "..."],
-  "current_company": "目前/最近所在公司",
-  "current_position": "目前/最近职位",
-  "work_experience_summary": "工作经历摘要（200字以内）",
-  "advantage": "候选人核心优势分析（3-5个优势，200字以内）",
-  "risk": "候选人潜在风险点（如跳槽频繁、技能短板等，200字以内）",
-  "evaluation": "综合评估（100字以内）"
-}`;
-          const userPrompt = `以下是一份简历的纯文本内容，请从中提取所有字段信息：\n\n${extractedText || fileBase64.substring(0, 16000)}`;
+          // 根据解析到的岗位获取能力维度（走 position_mappings → positions 链路）
+          let positionReq = null;
+          if (detectedPosition) {
+            try {
+              positionReq = await getPositionRequirements(c.env, detectedPosition);
+              console.log(`[AsyncParse] 岗位要求已获取: ${detectedPosition}, 能力维度: ${positionReq?.capability_dimensions?.length || 0}`);
+            } catch (e: any) {
+              console.warn(`[AsyncParse] 获取岗位要求失败: ${e.message}`);
+            }
+          }
+
+          // 构建带能力维度的 AI 评估 prompt
+          let positionSections = '';
+          if (positionReq) {
+            const dimsText = (positionReq.capability_dimensions || []).map((d: any) =>
+              `  - ${d.name}${d.description ? `：${d.description}` : ''}`
+            ).join('\n');
+            positionSections = [
+              '',
+              `【应聘岗位：${positionReq.positionTitle}】`,
+              positionReq.description ? `\n岗位职责：\n${positionReq.description}` : '',
+              positionReq.requirements ? `\n岗位要求：\n${positionReq.requirements}` : '',
+              positionReq.personalized_requirements ? `\n个性化要求：\n${positionReq.personalized_requirements}` : '',
+              dimsText ? `\n能力维度（需要逐项评估）：\n${dimsText}` : '',
+            ].filter(Boolean).join('\n');
+          }
+
+          let extraInfo = '';
+          if (filenameInfo.location || filenameInfo.salary || filenameInfo.metaInfo) {
+            const parts: string[] = [];
+            if (filenameInfo.location) parts.push(`地点：${filenameInfo.location}`);
+            if (filenameInfo.salary) parts.push(`期望薪资：${filenameInfo.salary}`);
+            if (filenameInfo.metaInfo) parts.push(`简历备注：${filenameInfo.metaInfo}`);
+            extraInfo = `\n【简历来源信息】\n${parts.join('\n')}`;
+          }
+
+          const parsePrompt = `你是一个专业的简历解析助手。请从简历文本中提取以下所有信息，并用JSON格式返回（不要加markdown代码块）。`;
+
+          // 合并全部信息作为 userPrompt
+          const userPrompt = [
+            `简历文本（请提取完整信息）：\n${extractedText || fileBase64.substring(0, 16000)}`,
+            positionSections,
+            extraInfo,
+          ].filter(Boolean).join('\n');
+
+          const systemPrompt = `你是一位资深招聘专家和简历解析助手。请解析以下简历文本，提取完整信息并进行AI初筛评估。返回JSON格式（不要加markdown代码块），包含两部分：
+
+第一部分 - 基础信息：
+- candidate_name: 候选人姓名（全名）
+- gender: 性别（男/女）
+- age: 年龄（数字）
+- phone: 手机号码
+- email: 电子邮箱
+- highest_degree: 最高学历
+- school: 毕业院校
+- major: 专业
+- graduation_year: 毕业年份
+- years_of_experience: 工作年限（数字）
+- current_company: 目前/最近所在公司
+- current_position: 目前/最近职位
+- salary_expectation: 期望薪资（如果有）
+- skills: 技能列表（数组）
+- certifications: 证书/资质（数组）
+- work_experience: 工作经历数组，每个包含 { company, title, duration, description, achievements }
+- education: 教育经历数组，每个包含 { school, degree, major, duration }
+
+第二部分 - AI初筛评估：
+- position: 应聘岗位（从文件名或文本中提取）
+- advantage (优势分析): 用中文描述3-5个核心优势
+- risk (风险点/劣势分析): 用中文描述2-4个劣势或风险
+- match_score: 人岗匹配度（0-100的整数）
+- recommendation: 推荐建议（"strongly_recommend"/"recommend"/"neutral"/"not_recommend"/"strongly_not_recommend"）
+- summary: 综合分析摘要（中文，2-3句话）
+- suggested_questions: 建议面试问题（中文，3-5个）`;
+
           const aiResp = await callAI(c.env, systemPrompt, userPrompt, 'deepseek-chat');
           let parsed: any = {};
           try {
@@ -2797,32 +2888,89 @@ app.post('/api/resumes', authMiddleware, async (c) => {
           // 更新 Bitable 记录
           try {
             const updateFields: Record<string, any> = {};
-            const parsedName = parsed.name || fileNameWithoutExt;
+            // 如果AI解析到了姓名且和文件名不同，更新
+            const parsedName = parsed.candidate_name || parsed.name || fileNameWithoutExt;
             if (parsedName && parsedName !== fileNameWithoutExt) updateFields['姓名'] = parsedName;
             if (parsed.gender) updateFields['性别'] = parsed.gender;
             if (parsed.age) updateFields['年龄'] = parsed.age;
-            if (parsed.education) updateFields['学历'] = parsed.education;
+            if (parsed.highest_degree || parsed.education) updateFields['学历'] = parsed.highest_degree || parsed.education;
             if (parsed.city) updateFields['城市'] = parsed.city;
+            // AI评估摘要
+            if (parsed.summary || parsed.evaluation) updateFields['AI简历评估'] = parsed.summary || parsed.evaluation;
             if (parsed.advantage) updateFields['优势分析'] = parsed.advantage;
             if (parsed.risk) updateFields['风险点'] = parsed.risk;
-            if (parsed.evaluation) updateFields['AI简历评估'] = parsed.evaluation;
             if (parsed.phone) updateFields['手机'] = parsed.phone;
             if (parsed.email) updateFields['邮箱'] = parsed.email;
-            if (parsed.work_years) updateFields['工作年限'] = parsed.work_years;
-            if (Array.isArray(parsed.skills) && parsed.skills.length > 0) updateFields['技能'] = parsed.skills.join(', ');
-            if (parsed.work_experience_summary) updateFields['工作经历'] = parsed.work_experience_summary;
+            if (parsed.skills && Array.isArray(parsed.skills) && parsed.skills.length > 0) updateFields['技能'] = parsed.skills.join(', ');
+            // 岗位名
+            const positionForField = parsed.position || detectedPosition || filenameInfo.position;
+            if (positionForField) updateFields['面试岗位'] = positionForField;
+            // 工作经历摘要
+            if (parsed.work_experience_summary || parsed.work_experience) {
+              const expText = Array.isArray(parsed.work_experience)
+                ? parsed.work_experience.map((e: any) => `${e.company || ''} - ${e.title || ''}: ${e.description || ''}`).join('; ')
+                : parsed.work_experience_summary;
+              updateFields['工作经历'] = String(expText).substring(0, 500);
+            }
+            // 匹配度评分
+            if (parsed.match_score !== undefined) updateFields['AI简历初筛结果'] = String(parsed.match_score);
+
             await bitableUpdateRecord(c.env, tableId, recordId, updateFields);
             console.log(`[AsyncParse] 解析完成并更新 Bitable: ${parsedName}`);
           } catch (updateErr: any) {
             console.error(`[AsyncParse] 更新 Bitable 失败: ${updateErr.message}`);
           }
 
-          // 解析完成标记 D1 状态为 completed
+          // 将完整的解析结果存入 D1 parsed_data
           try {
+            const fullParsedData: any = {
+              candidate_name: parsed.candidate_name || parsed.name || fileNameWithoutExt,
+              gender: parsed.gender || null,
+              age: parsed.age || null,
+              phone: parsed.phone || null,
+              email: parsed.email || null,
+              highest_degree: parsed.highest_degree || parsed.education || null,
+              school: parsed.school || null,
+              major: parsed.major || null,
+              years_of_experience: parsed.years_of_experience || null,
+              skills: parsed.skills || [],
+              current_company: parsed.current_company || null,
+              current_position: parsed.current_position || null,
+              advantage: parsed.advantage || null,
+              risk: parsed.risk || null,
+              match_score: parsed.match_score || null,
+              summary: parsed.summary || parsed.evaluation || null,
+              position: parsed.position || detectedPosition || filenameInfo.position,
+              location: filenameInfo.location || null,
+              salary: filenameInfo.salary || null,
+              metaInfo: filenameInfo.metaInfo || null,
+              // 岗位要求信息
+              position_requirements: positionReq ? {
+                positionTitle: positionReq.positionTitle,
+                description: positionReq.description?.substring(0, 500),
+                requirements: positionReq.requirements?.substring(0, 500),
+                capability_dimensions: positionReq.capability_dimensions,
+              } : null,
+            };
             await c.env.DB.prepare(
-              'UPDATE resumes SET parse_status = ?, candidate_name = ?, updated_at = ? WHERE id = ?'
-            ).bind('completed', parsed.name || fileNameWithoutExt, now(), recordId).run();
-          } catch {}
+              'UPDATE resumes SET parse_status = ?, parsed_data = ?, candidate_name = ?, raw_text = ?, updated_at = ? WHERE id = ?'
+            ).bind(
+              'completed',
+              JSON.stringify(fullParsedData),
+              parsed.candidate_name || parsed.name || fileNameWithoutExt,
+              (extractedText || '').substring(0, 50000),
+              now(),
+              recordId
+            ).run();
+            console.log(`[AsyncParse] D1 更新完成: ${recordId}, status=completed`);
+          } catch (e: any) {
+            console.error(`[AsyncParse] D1 更新失败: ${e.message}`);
+            // 即使 D1 更新失败，也标记为 completed 让前端知道解析完成
+            try {
+              await c.env.DB.prepare('UPDATE resumes SET parse_status = ?, updated_at = ? WHERE id = ?')
+                .bind('completed', now(), recordId).run();
+            } catch {}
+          }
 
           // 清理临时文件
           tempFileStore.delete(mineruFileKey);
