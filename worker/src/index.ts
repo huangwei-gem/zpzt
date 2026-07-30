@@ -3136,8 +3136,9 @@ app.get('/api/resumes', authMiddleware, async (c) => {
 
 app.get('/api/resumes/:id', authMiddleware, async (c) => {
   try {
+    const resumeId = c.req.param('id');
     const tableId = getBitableTableId(c.env, 'talent');
-    const record = await bitableGetRecord(c.env, tableId, c.req.param('id'));
+    const record = await bitableGetRecord(c.env, tableId, resumeId);
     if (!record) return c.json({ detail: 'Not found' }, 404);
     const item = parseTalentRecord(record);
     // 加载岗位映射
@@ -3149,6 +3150,48 @@ app.get('/api/resumes/:id', authMiddleware, async (c) => {
         item.standard_position = item.position_applied || '';
       }
     } catch { item.standard_position = item.position_applied || ''; }
+
+    // 合并 D1 中的解析数据（parsed_data 包含完整 JSON 评估结果, raw_text 包含 PDF 纯文本）
+    try {
+      const d1Row = await c.env.DB.prepare(
+        'SELECT parsed_data, raw_text, parse_status FROM resumes WHERE id = ?'
+      ).bind(resumeId).first() as any;
+      if (d1Row) {
+        item.parse_status = d1Row.parse_status || item.parse_status;
+        // 从 D1 的完整 parsed_data JSON 中提取 ai_review 对象（前端详情页需要）
+        if (d1Row.parsed_data) {
+          try {
+            const parsed = typeof d1Row.parsed_data === 'string'
+              ? JSON.parse(d1Row.parsed_data)
+              : d1Row.parsed_data;
+            item.parsed_data = parsed;
+            // 构建前端期望的 ai_review 结构
+            if (parsed.advantage || parsed.risk || parsed.summary || parsed.match_score !== undefined || parsed.recommendation) {
+              item.ai_review = {
+                summary: parsed.summary || '',
+                advantage: parsed.advantage || parsed.advantages || [],
+                risk: parsed.risk || parsed.risks || [],
+                match_score: parsed.match_score,
+                recommendation: parsed.recommendation || '',
+                suggested_questions: parsed.suggested_questions || [],
+                skills: parsed.skills || [],
+                // strengths/risks 格式兼容
+                strengths: Array.isArray(parsed.advantage) ? parsed.advantage
+                  : typeof parsed.advantage === 'string' ? [parsed.advantage] : [],
+                risks: Array.isArray(parsed.risk) ? parsed.risk
+                  : typeof parsed.risk === 'string' ? [parsed.risk] : [],
+              };
+              item.match_score = parsed.match_score;
+            }
+          } catch {}
+        }
+        // 返回原始解析文本
+        if (d1Row.raw_text) {
+          item.raw_text = d1Row.raw_text;
+        }
+      }
+    } catch { /* D1 回退失败时不阻塞 */ }
+
     return c.json(item);
   } catch (e: any) {
     return c.json({ detail: e.message }, 500);

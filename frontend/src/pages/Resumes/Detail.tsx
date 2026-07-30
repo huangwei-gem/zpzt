@@ -701,6 +701,18 @@ const ResumeDetail: React.FC = () => {
             </div>
           )}
 
+          {/* 原始解析文本 */}
+          {resume.raw_text && (
+            <>
+              <Divider style={{ borderColor: '#E2E8F0' }}><FilePdfOutlined style={{ color: '#6366F1' }} /> 简历解析原文</Divider>
+              <div style={{ background: '#F8FAFC', padding: '20px', borderRadius: '12px', border: '1px solid #E2E8F0', maxHeight: 400, overflowY: 'auto' }}>
+                <pre style={{ fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'monospace', margin: 0, color: '#334155' }}>
+                  {resume.raw_text}
+                </pre>
+              </div>
+            </>
+          )}
+
           {/* 其他岗位匹配推荐 */}
           {resume.other_position_matches && resume.other_position_matches.length > 0 && (
             <>
