@@ -193,15 +193,18 @@ const Dashboard: React.FC = () => {
   const [filterDivision, setFilterDivision] = useState<string | undefined>(undefined);
   const [filterStatus, setFilterStatus] = useState<string | undefined>(undefined);
   const [searchPosition, setSearchPosition] = useState('');
+  const [responsiblePerson, setResponsiblePerson] = useState<string>(() => sessionStorage.getItem('responsible_person') || '');
 
   const fetchData = useCallback(async (showLoading = true) => {
     if (showLoading) setLoading(true);
     else setRefreshing(true);
     try {
+      const person = sessionStorage.getItem('responsible_person') || '';
+      const params = person ? { responsible_person: person } : {};
       const [overviewRes, positionsRes, moduleRes] = await Promise.all([
-        request.get('/dashboard/overview'),
-        request.get('/dashboard/positions-detail'),
-        request.get('/dashboard/module-stats'),
+        request.get('/dashboard/overview', { params }),
+        request.get('/dashboard/positions-detail', { params }),
+        request.get('/dashboard/module-stats', { params }),
       ]);
       setOverview(overviewRes);
       setPositions(positionsRes);
@@ -216,6 +219,25 @@ const Dashboard: React.FC = () => {
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // 监听全局负责人筛选变化后重新加载仪表盘数据
+  useEffect(() => {
+    const checkPerson = () => {
+      const newPerson = sessionStorage.getItem('responsible_person') || '';
+      if (newPerson !== responsiblePerson) {
+        setResponsiblePerson(newPerson);
+        fetchData(false);
+      }
+    };
+    // 轮询检查（无 storage 事件时兜底）
+    const timer = setInterval(checkPerson, 2000);
+    // storage 事件（跨标签页）
+    window.addEventListener('storage', checkPerson);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('storage', checkPerson);
+    };
+  }, [responsiblePerson, fetchData]);
 
   const overviewData = overview?.overview;
 

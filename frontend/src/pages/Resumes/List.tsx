@@ -826,7 +826,6 @@ const ResumesList: React.FC = () => {
         formData.append('pdf_text', pdfText); // 前端提取好的纯文本！
         try {
           await request.post('/resumes', formData, {
-            headers: { 'Content-Type': 'multipart/form-data' },
             timeout: 120000, // 2min - AI解析可能需要更长时间
           });
           hide();

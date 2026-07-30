@@ -3243,31 +3243,34 @@ app.get('/api/resumes/:id', authMiddleware, async (c) => {
         }
 
         // 次优：从 parsed_data 构建 ai_review（异步解析流水线写入的完整 JSON）
-        if (!item.ai_review && d1Row.parsed_data) {
+        if (d1Row.parsed_data) {
           try {
             const parsed = typeof d1Row.parsed_data === 'string'
               ? JSON.parse(d1Row.parsed_data)
               : d1Row.parsed_data;
             item.parsed_data = parsed;
-            // 提取个性化需求匹配信息到顶层
+            // 提取个性化需求匹配信息到顶层（无论是否有 ai_review）
             if (parsed.personalized_match_score !== undefined) item.personalized_match_score = parsed.personalized_match_score;
             if (parsed.personalized_met_items) item.personalized_met_items = parsed.personalized_met_items;
             if (parsed.personalized_unmet_items) item.personalized_unmet_items = parsed.personalized_unmet_items;
-            if (parsed.advantage || parsed.risk || parsed.summary || parsed.match_score !== undefined || parsed.recommendation) {
-              item.ai_review = {
-                summary: parsed.summary || '',
-                advantage: parsed.advantage || parsed.advantages || [],
-                risk: parsed.risk || parsed.risks || [],
-                match_score: parsed.match_score,
-                recommendation: parsed.recommendation || '',
-                suggested_questions: parsed.suggested_questions || [],
-                skills: parsed.skills || [],
-                strengths: Array.isArray(parsed.advantage) ? parsed.advantage
-                  : typeof parsed.advantage === 'string' ? [parsed.advantage] : [],
-                risks: Array.isArray(parsed.risk) ? parsed.risk
-                  : typeof parsed.risk === 'string' ? [parsed.risk] : [],
-              };
-              if (parsed.match_score !== undefined) item.match_score = parsed.match_score;
+            // 仅当还没 ai_review 时从 parsed_data 构建
+            if (!item.ai_review) {
+              if (parsed.advantage || parsed.risk || parsed.summary || parsed.match_score !== undefined || parsed.recommendation) {
+                item.ai_review = {
+                  summary: parsed.summary || '',
+                  advantage: parsed.advantage || parsed.advantages || [],
+                  risk: parsed.risk || parsed.risks || [],
+                  match_score: parsed.match_score,
+                  recommendation: parsed.recommendation || '',
+                  suggested_questions: parsed.suggested_questions || [],
+                  skills: parsed.skills || [],
+                  strengths: Array.isArray(parsed.advantage) ? parsed.advantage
+                    : typeof parsed.advantage === 'string' ? [parsed.advantage] : [],
+                  risks: Array.isArray(parsed.risk) ? parsed.risk
+                    : typeof parsed.risk === 'string' ? [parsed.risk] : [],
+                };
+                if (parsed.match_score !== undefined) item.match_score = parsed.match_score;
+              }
             }
           } catch {}
         }
