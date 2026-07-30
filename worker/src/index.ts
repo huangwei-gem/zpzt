@@ -3151,21 +3151,42 @@ app.get('/api/resumes/:id', authMiddleware, async (c) => {
       }
     } catch { item.standard_position = item.position_applied || ''; }
 
-    // 合并 D1 中的解析数据（parsed_data 包含完整 JSON 评估结果, raw_text 包含 PDF 纯文本）
+    // 合并 D1 中的解析数据（parsed_data 包含完整 JSON 评估结果,
+    // ai_review 由 "AI初筛" 或 "重新解析" 按钮写入, raw_text 包含 PDF 纯文本）
     try {
       const d1Row = await c.env.DB.prepare(
-        'SELECT parsed_data, raw_text, parse_status FROM resumes WHERE id = ?'
+        'SELECT parsed_data, ai_review, raw_text, match_score, parse_status FROM resumes WHERE id = ?'
       ).bind(resumeId).first() as any;
       if (d1Row) {
         item.parse_status = d1Row.parse_status || item.parse_status;
-        // 从 D1 的完整 parsed_data JSON 中提取 ai_review 对象（前端详情页需要）
-        if (d1Row.parsed_data) {
+        // 优先：ai_review 列（由 AI初筛 / 重新解析 按钮写入）
+        if (d1Row.ai_review) {
+          // ai_review 可能是 JSON 字符串（ai-screen 写入）或纯文本（reparse 写入 markdown）
+          if (typeof d1Row.ai_review === 'string' && (d1Row.ai_review.startsWith('{') || d1Row.ai_review.startsWith('['))) {
+            try {
+              const parsed = JSON.parse(d1Row.ai_review);
+              item.ai_review = parsed;
+              if (parsed.match_score !== undefined) item.match_score = parsed.match_score;
+              // 兼容 ai-screen 输出的 strengths/risks 命名
+              if (Array.isArray(parsed.strengths) || Array.isArray(parsed.risks) || parsed.summary) {
+                // 已经是完整对象，不需要转换
+              }
+            } catch {
+              // JSON 解析失败，当作纯文本
+              item.ai_review = d1Row.ai_review;
+            }
+          } else {
+            // 纯文本 markdown 格式（reparse 写入）
+            item.ai_review = d1Row.ai_review;
+          }
+        }
+        // 次优：从 parsed_data 构建 ai_review（异步解析流水线写入的完整 JSON）
+        if (!item.ai_review && d1Row.parsed_data) {
           try {
             const parsed = typeof d1Row.parsed_data === 'string'
               ? JSON.parse(d1Row.parsed_data)
               : d1Row.parsed_data;
             item.parsed_data = parsed;
-            // 构建前端期望的 ai_review 结构
             if (parsed.advantage || parsed.risk || parsed.summary || parsed.match_score !== undefined || parsed.recommendation) {
               item.ai_review = {
                 summary: parsed.summary || '',
@@ -3175,15 +3196,18 @@ app.get('/api/resumes/:id', authMiddleware, async (c) => {
                 recommendation: parsed.recommendation || '',
                 suggested_questions: parsed.suggested_questions || [],
                 skills: parsed.skills || [],
-                // strengths/risks 格式兼容
                 strengths: Array.isArray(parsed.advantage) ? parsed.advantage
                   : typeof parsed.advantage === 'string' ? [parsed.advantage] : [],
                 risks: Array.isArray(parsed.risk) ? parsed.risk
                   : typeof parsed.risk === 'string' ? [parsed.risk] : [],
               };
-              item.match_score = parsed.match_score;
+              if (parsed.match_score !== undefined) item.match_score = parsed.match_score;
             }
           } catch {}
+        }
+        // D1 层的 match_score 兜底
+        if (item.match_score === undefined && d1Row.match_score !== null) {
+          item.match_score = d1Row.match_score;
         }
         // 返回原始解析文本
         if (d1Row.raw_text) {
