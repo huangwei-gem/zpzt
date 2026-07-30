@@ -1534,10 +1534,18 @@ function parseFilenameInfo(name: string): FilenameParsedInfo {
     let cleanName: string | null = null;
     let metaInfo = '';
     if (after) {
+      // 先用下划线分割
       const afterParts = after.split('_');
       cleanName = afterParts[0]?.trim() || null;
       if (afterParts.length > 1) {
         metaInfo = afterParts.slice(1).join('_').trim();
+      } else {
+        // 没用下划线分割的年限（空格分隔）→ 例如 "万佳 10年以上"
+        const spaceParts = after.trim().split(/\s+/);
+        if (spaceParts.length > 1) {
+          cleanName = spaceParts[0]?.trim() || null;
+          metaInfo = spaceParts.slice(1).join(' ').trim();
+        }
       }
     }
     return { position, location, salary, cleanName, metaInfo };
@@ -8498,6 +8506,7 @@ export default {
       "ALTER TABLE interviews ADD COLUMN primary_interviewer TEXT DEFAULT ''",
       "ALTER TABLE interviews ADD COLUMN secondary_interviewer TEXT DEFAULT ''",
       "ALTER TABLE interviews ADD COLUMN updated_at TEXT DEFAULT ''",
+      "ALTER TABLE resumes ADD COLUMN updated_at TEXT DEFAULT ''",
       "ALTER TABLE positions ADD COLUMN responsible_person TEXT DEFAULT ''",
       "ALTER TABLE positions ADD COLUMN personalized_requirements TEXT DEFAULT ''",
       "ALTER TABLE positions ADD COLUMN capability_dimensions TEXT DEFAULT '[]'",
