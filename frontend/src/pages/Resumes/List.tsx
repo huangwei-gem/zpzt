@@ -1239,6 +1239,9 @@ const ResumesList: React.FC = () => {
                       onClick={e => e.stopPropagation()}
                     />
                     <span style={{ fontWeight: 600, fontSize: 15 }}>{record.candidate_name || '未知'}</span>
+                    {/* 解析状态 */}
+                    {record.parse_status === 'processing' && <Tag color="processing" style={{ margin: 0, fontSize: 11 }}>⏳ 解析中</Tag>}
+                    {record.parse_status === 'failed' && <Tag color="error" style={{ margin: 0, fontSize: 11 }}>❌ 解析失败</Tag>}
                     {/* 入库时间 — 为空的默认今天 */}
                     <Tag style={{ margin: 0, fontSize: 11, border: '1px solid #e6d5ff', background: '#f9f0ff', color: '#531dab' }}>
                       🕐 {record.create_time ? formatCreateTime(record.create_time) : '-'}

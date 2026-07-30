@@ -1883,6 +1883,7 @@ app.get('/api/interviews', authMiddleware, async (c) => {
   let sql = `SELECT 
     i.*,
     r.candidate_name AS _candidate_name,
+    r.parse_status AS _parse_status,
     p.title AS _position_title
   FROM interviews i
   LEFT JOIN resumes r ON i.resume_id = r.id
@@ -3031,10 +3032,10 @@ app.get('/api/resumes', authMiddleware, async (c) => {
       });
     } catch {}
 
-    // 从 D1 加载 created_at 和 parse_status，回退飞书缺失的时间
+    // 从 D1 加载 created_at 和 parse_status
     try {
       const { results: d1Rows } = await c.env.DB.prepare(
-        "SELECT id, created_at, parse_status FROM resumes WHERE created_at IS NOT NULL"
+        "SELECT id, candidate_name, created_at, parse_status FROM resumes WHERE created_at IS NOT NULL"
       ).all();
       const d1Map = new Map((d1Rows || []).map((r: any) => [r.id, r]));
       items = items.map((item: any) => {
@@ -3056,6 +3057,31 @@ app.get('/api/resumes', authMiddleware, async (c) => {
         }
         return item;
       });
+
+      // 合并 D1 中正在解析中（processing）但尚未写入飞书人才库的记录
+      // 这样新上传的简历能立即在前端显示为"解析中"
+      const feishuIds = new Set(items.map((i: any) => i.id));
+      for (const d1 of (d1Rows || [])) {
+        if (!feishuIds.has(d1.id) && d1.parse_status === 'processing') {
+          items.push({
+            id: d1.id,
+            candidate_name: d1.candidate_name || '未知',
+            create_time: d1.created_at || '',
+            parse_status: 'processing',
+            status: 'new',
+            age: null,
+            education: null,
+            major: null,
+            position_applied: null,
+            standard_position: '',
+            ai_evaluation: null,
+            screening_result: null,
+            biz_owner: null,
+            mapped_position: null,
+            _raw_fields: {},
+          });
+        }
+      }
     } catch { /* D1 回退失败时不阻塞 */ }
 
     // 加载岗位映射表，将 position_applied 映射为标准岗位名
@@ -3093,6 +3119,13 @@ app.get('/api/resumes', authMiddleware, async (c) => {
         });
       } catch { /* 负责人映射失败时不阻塞 */ }
     }
+
+    // 排序：按 create_time DESC（最近上传的排最前）
+    filtered.sort((a: any, b: any) => {
+      const ta = a.create_time ? new Date(a.create_time).getTime() : 0;
+      const tb = b.create_time ? new Date(b.create_time).getTime() : 0;
+      return tb - ta;
+    });
 
     return c.json(filtered);
   } catch (e: any) {
