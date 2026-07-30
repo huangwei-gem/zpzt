@@ -920,7 +920,7 @@ const ResumesList: React.FC = () => {
       <Space size="small" wrap>
         <Tooltip title="预览"><Button type="text" size="small" icon={<FileTextOutlined style={{ color: '#6366F1' }} />} onClick={() => handlePreview(record)} /></Tooltip>
         <Tooltip title="下载"><Button type="text" size="small" icon={<DownloadOutlined style={{ color: '#22C55E' }} />} onClick={() => handleDownload(record)} /></Tooltip>
-        <Tooltip title="AI评估"><Button type="text" size="small" icon={<ThunderboltOutlined style={{ color: '#faad14' }} />} /></Tooltip>
+        <Tooltip title="AI评估"><Button type="text" size="small" icon={<ThunderboltOutlined style={{ color: '#faad14' }} />} onClick={() => handleReparse(record)} /></Tooltip>
         <Tooltip title="关注"><Button type="text" size="small" icon={<StarOutlined style={{ color: '#faad14' }} />} /></Tooltip>
         {isPending && (
           <>

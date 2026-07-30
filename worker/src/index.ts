@@ -388,8 +388,12 @@ async function callAI(env: Env, systemPrompt: string, userPrompt: string, model?
   // 失败时降级 Agnes，再降级 Cloudflare Workers AI
   if (deepseekKey) {
     const baseUrl = deepseekBaseUrl.replace(/\/+$/, '');
-    const actualModel = model === 'deepseek-v4-flash' ? 'deepseek-chat' : (model || 'deepseek-chat');
-    try {
+    // Workers 无法访问本地地址，跳过直接走备选
+    if (/localhost|127\.0\.0\.1|0\.0\.0\.0/.test(baseUrl)) {
+      console.warn('[AI] DeepSeek URL 指向本地地址，跳过');
+    } else {
+      const actualModel = model === 'deepseek-v4-flash' ? 'deepseek-chat' : (model || 'deepseek-chat');
+      try {
       const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: {
@@ -418,7 +422,7 @@ async function callAI(env: Env, systemPrompt: string, userPrompt: string, model?
     } catch (e: any) {
       console.warn(`[AI] DeepSeek 失败，降级 Agnes: ${e.message}`);
     }
-  }
+  }}
 
   // 备选：Agnes AI（https://www.agnes-ai.com/）
   if (agnesKey) {
