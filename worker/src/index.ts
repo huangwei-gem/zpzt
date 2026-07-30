@@ -3061,9 +3061,9 @@ app.get('/api/resumes', authMiddleware, async (c) => {
       items = items.map(item => {
         const extra = extraMap.get(item.id);
         if (extra) {
-          if (extra.major && !item.major) item.major = extra.major;
-          if (extra.gender && !item.gender) item.gender = extra.gender;
-          if (extra.education && !item.education) item.education = extra.education;
+          if (extra.major && (!item.major || item.major === '未知')) item.major = extra.major;
+          if (extra.gender && (!item.gender || item.gender === '未知')) item.gender = extra.gender;
+          if (extra.education && (!item.education || item.education === '未知')) item.education = extra.education;
           if (extra.age && !item.age) item.age = extra.age;
         }
         return item;
@@ -3094,6 +3094,11 @@ app.get('/api/resumes', authMiddleware, async (c) => {
               if (pd.personalized_match_score !== undefined) item.personalized_match_score = pd.personalized_match_score;
               if (pd.personalized_met_items) item.personalized_met_items = pd.personalized_met_items;
               if (pd.personalized_unmet_items) item.personalized_unmet_items = pd.personalized_unmet_items;
+              // 从 parsed_data 提取基础信息字段（列表展示用，飞书字段为空/未知时覆盖）
+              if (!item.education || item.education === '未知') item.education = pd.highest_degree || pd.education || item.education;
+              if (!item.gender || item.gender === '未知') item.gender = pd.gender || item.gender;
+              if (!item.major) item.major = pd.major || item.major;
+              if (!item.age) item.age = pd.age || item.age;
             } catch {}
           }
         }
@@ -4312,6 +4317,19 @@ app.post('/api/resumes/:id/reparse', authMiddleware, async (c) => {
       'reparsed',
       id
     ).run();
+
+    // 同步基础字段到 resume_extras，供列表接口展示
+    try {
+      const extraMajor = merged.major || '';
+      const extraGender = merged.gender || '';
+      const extraEducation = merged.highest_degree || merged.education || '';
+      const extraAge = merged.age !== undefined && merged.age !== null ? String(merged.age) : '';
+      await c.env.DB.prepare(
+        "INSERT OR REPLACE INTO resume_extras (feishu_record_id, major, gender, education, age, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'))"
+      ).bind(id, extraMajor, extraGender, extraEducation, extraAge).run();
+    } catch (e: any) {
+      console.error(`[Reparse] 写入 resume_extras 失败: ${e.message}`);
+    }
 
     // 同步写回飞书多维表格（人才库表）
     try {
