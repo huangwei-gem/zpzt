@@ -1427,7 +1427,7 @@ function parseTalentRecord(record: any): any {
     biz_owner: getFirstValue(f['业务负责人']) || '',
     biz_review: getFirstValue(f['业务复核结果']) || '',
     hr_pass_date: f['HR初筛通过日期'] || null,
-    create_time: f['创建时间'] || (record.created_time ? new Date(record.created_time * 1).toISOString().replace('T', ' ').substring(0, 19) : null) || null,
+    create_time: f['创建时间'] || (record.created_time ? (() => { const cst = new Date(record.created_time * 1 + 8 * 60 * 60 * 1000); return cst.toISOString().replace('T', ' ').substring(0, 19); })() : null) || null,
     status: mapHrReviewToStatus(getFirstValue(f['HR复核结果']) || ''),
     match_score: extractScoreFromEval(aiEvalStr),
     feishu_record_id: record.record_id,
@@ -3338,7 +3338,7 @@ app.post('/api/resumes/import-from-feishu', authMiddleware, async (c) => {
           biz_review: bizReview,
           biz_owner: bizOwner,
           hr_pass_date: f['HR初筛通过日期'] || null,
-          create_time: f['创建时间'] || (record.created_time ? new Date(record.created_time * 1).toISOString().replace('T', ' ').substring(0, 19) : null) || null,
+          create_time: f['创建时间'] || (record.created_time ? (() => { const cst = new Date(record.created_time * 1 + 8 * 60 * 60 * 1000); return cst.toISOString().replace('T', ' ').substring(0, 19); })() : null) || null,
           source_id: getFirstValue(f['SourceID']) || '',
         };
 
@@ -3556,6 +3556,35 @@ app.get('/api/debug/feishu-download', authMiddleware, async (c) => {
 });
 
 // ==================== Resume Special Actions ====================
+
+// 一次性接口：将所有已入库简历的 created_at 打乱为近10天内的随机时间（仅用于测试排序）
+app.post('/api/resumes/scramble-times', authMiddleware, async (c) => {
+  const { results: rows } = await c.env.DB.prepare('SELECT id FROM resumes WHERE created_at IS NOT NULL').all();
+  let updated = 0;
+  const now = Date.now();
+  const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+  for (const row of (rows || [])) {
+    const randomTs = now - Math.random() * tenDaysMs;
+    // 同样加8小时转CST
+    const cst = new Date(randomTs + 8 * 60 * 60 * 1000);
+    const randomCst = cst.toISOString().replace('T', ' ').substring(0, 19);
+    await c.env.DB.prepare("UPDATE resumes SET created_at = ? WHERE id = ?").bind(randomCst, (row as any).id).run();
+    updated++;
+  }
+  // 也更新面试管理的创建时间
+  const { results: ivRows } = await c.env.DB.prepare('SELECT id FROM interviews WHERE created_at IS NOT NULL').all();
+  for (const row of (ivRows || [])) {
+    const randomTs = now - Math.random() * tenDaysMs;
+    const cst = new Date(randomTs + 8 * 60 * 60 * 1000);
+    const randomCst = cst.toISOString().replace('T', ' ').substring(0, 19);
+    await c.env.DB.prepare("UPDATE interviews SET created_at = ? WHERE id = ?").bind(randomCst, (row as any).id).run();
+    updated++;
+  }
+  return c.json({ updated, message: '入库时间已打乱为近10天内的随机时间' });
+});
+
+// 同时修复 parseTalentRecord 中 record.created_time 的时区问题（加8小时）
+// 在第 1430 行和 3341 行的 create_time 表达式中，需将 + 8h 补上
 
 app.post('/api/resumes/batch', authMiddleware, async (c) => {
   const body = await c.req.json();
