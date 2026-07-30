@@ -16,6 +16,8 @@ interface Env {
   FEISHU_OAUTH_REDIRECT_URI?: string;
   RESUMES_KV?: KVNamespace;
   MINERU_API_KEY?: string;
+  AGNES_API_KEY?: string;
+  AGNES_BASE_URL?: string;
 }
 
 // 飞书配置（内置 fallback，页面部署时不用再设环境变量）
@@ -149,6 +151,10 @@ async function verifyJwt(secretKey: string, token: string): Promise<any | null> 
     return obj;
   } catch { return null; }
 }
+
+// D1 的 blob/string 限制约 1MB，base64 编码比原始数据大 ~33%。
+// 统一用 500KB 作为"可缓存在 D1 的 PDF 大小上限"，超出走飞书云盘或按需从飞书重新下载，避免 SQLITE_TOOBIG。
+const PDF_D1_STORAGE_LIMIT = 500000;
 
 // ==================== MinerU PDF 文本提取（v4 API）====================
 const MINERU_BASE_URL = 'https://mineru.net';
@@ -297,6 +303,38 @@ async function verifyPassword(secretKey: string, password: string, hash: string)
 
 // ==================== AI Helper ====================
 
+// Agnes AI（agnes-25-flash）调用 —— OpenAI 兼容接口
+// 文档：https://www.agnes-ai.com/zh-Hans/docs/agnes-25-flash
+// AGNES_BASE_URL 默认 https://api.agnes-ai.com/v1，端点 /chat/completions
+async function callAgnes(env: Env, systemPrompt: string, userPrompt: string, model: string = 'agnes-25-flash'): Promise<string> {
+  const baseUrl = (env.AGNES_BASE_URL || 'https://api.agnes-ai.com/v1').replace(/\/+$/, '');
+  const resp = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${env.AGNES_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      max_tokens: 4096,
+    }),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    console.error(`[AI] Agnes API error ${resp.status}: ${errText}`);
+    throw new Error(`Agnes API error ${resp.status}: ${errText}`);
+  }
+  const data: any = await resp.json();
+  if (data?.choices?.[0]?.message?.content) {
+    return data.choices[0].message.content;
+  }
+  throw new Error(`Agnes API response format unexpected: ${JSON.stringify(data)}`);
+}
+
 // 从 system_configs 读取自定义 prompt，没有则返回 null
 async function getCustomPrompt(env: Env, key: string): Promise<{ system: string; user: string } | null> {
   try {
@@ -313,7 +351,20 @@ async function getCustomPrompt(env: Env, key: string): Promise<{ system: string;
 }
 
 async function callAI(env: Env, systemPrompt: string, userPrompt: string, model?: string): Promise<string> {
-  // 优先使用 DeepSeek（或兼容的 OpenAI API）
+  // 优先使用 Agnes AI（https://www.agnes-ai.com/，agnes-25-flash）
+  // 失败时降级 DeepSeek，再降级 Cloudflare Workers AI。
+  if (env.AGNES_API_KEY) {
+    const agnesModel = model && model !== 'deepseek-chat' && model !== 'deepseek-v4-flash'
+      ? model
+      : 'agnes-25-flash';
+    try {
+      return await callAgnes(env, systemPrompt, userPrompt, agnesModel);
+    } catch (e: any) {
+      console.warn(`[AI] Agnes 失败，降级 DeepSeek: ${e.message}`);
+    }
+  }
+
+  // 备选：DeepSeek（或兼容的 OpenAI API）
   if (env.AI_API_KEY) {
     const baseUrl = (env.AI_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
     const deepseekModel = model === 'deepseek-v4-flash' ? 'deepseek-chat' : (model || 'deepseek-chat');
@@ -2582,10 +2633,9 @@ app.post('/api/resumes', authMiddleware, async (c) => {
 
     // 2. 保存文件内容到 D1（小文件）或上传到飞书云盘（大文件）
     // 注意：D1 的 blob/string 限制约 1MB，base64 编码比原始数据大 ~33%
-    const D1_STORAGE_LIMIT = 500000;
     let fileStored = false;
     try {
-      if (fileSize < D1_STORAGE_LIMIT) {
+      if (fileSize < PDF_D1_STORAGE_LIMIT) {
         await c.env.DB.prepare(
           `INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`
         ).bind(recordId, fileId, file.name, fileSize, fileBase64).run();
@@ -2612,84 +2662,57 @@ app.post('/api/resumes', authMiddleware, async (c) => {
       }
     }
 
-    // 3. AI 解析简历（优先使用前端用 pdfjs 提取好的纯文本，准确率高得多）
-    let parsedName = fileNameWithoutExt;
-    let parsedGender = '';
-    let parsedAge: number | null = null;
-    let parsedEducation = '';
-    let parsedCity = '';
-    let parsedAdvantage = '';
-    let parsedRisk = '';
-    let parsedEval = '';
-    let parsedPhone = '';
-    let parsedEmail = '';
-    let parsedSkills: string[] = [];
-    let parsedWorkYears: number | null = null;
-    let parsedExperience: string = '';
+    // 3. 后台异步 AI 解析简历（先返回前端，解析完成后自动更新）
+    // 将 PDF 文件存入 tempFileStore 供后台异步解析使用
+    const mineruFileKey = crypto.randomUUID();
+    tempFileStore.set(mineruFileKey, {
+      data: fileBuffer,
+      name: file.name,
+      expiry: Date.now() + TEMP_FILE_TTL,
+    });
+
+    // 从请求中获取信息供后台任务使用
+    const pdfText = formData.get('pdf_text')?.toString().trim() || '';
+    const authorization = c.req.header('Authorization') || '';
+
+    // 在后台异步解析简历
     try {
-      // 优先取前端 pdfjs 提取的纯文本（质量好，无 AI 幻觉）
-      let pdfText = formData.get('pdf_text')?.toString().trim() || '';
-      let extractedText = pdfText || '';
-
-      // 前端没传文本时，使用 MinerU 提取（比 AI 从 base64 提取更准确）
-      if (!extractedText || extractedText.length < 20) {
-        console.log('[Upload] 前端未传 pdf_text，使用 MinerU 提取 PDF 文本');
+      c.executionCtx.waitUntil((async () => {
         try {
-          // 把文件存入临时存储，生成公网可访问的 URL 供 MinerU 下载
-          const mineruFileKey = crypto.randomUUID();
-          tempFileStore.set(mineruFileKey, {
-            data: fileBuffer,
-            name: file.name,
-            expiry: Date.now() + TEMP_FILE_TTL,
-          });
-          // 从请求中获取当前公网 URL（MinerU 需要从公网 URL 下载文件）
-          const originUrl = new URL(c.req.url);
-          const mineruFileUrl = `${originUrl.origin}/api/temp-file/${mineruFileKey}/${encodeURIComponent(file.name)}`;
+          console.log(`[AsyncParse] 开始后台解析简历: ${fileNameWithoutExt}`);
+          let extractedText = pdfText || '';
 
-          extractedText = await extractTextWithMinerU(c.env, fileBuffer, file.name, mineruFileUrl);
-          if (extractedText && extractedText.length > 20) {
-            console.log(`[Upload] MinerU 提取成功: ${extractedText.length} 字符`);
-          } else {
-            // MinerU 失败，兜底用 AI 从 base64 提取
-            console.log('[Upload] MinerU 提取文本不足，走 AI base64 提取兜底');
-            extractedText = '';
+          // 尝试 MinerU 提取
+          if (!extractedText || extractedText.length < 20) {
+            console.log(`[AsyncParse] 使用 MinerU 提取文本: ${file.name}`);
+            try {
+              const originUrl = new URL(c.req.url);
+              const mineruFileUrl = `${originUrl.origin}/api/temp-file/${mineruFileKey}/${encodeURIComponent(file.name)}`;
+              extractedText = await extractTextWithMinerU(c.env, fileBuffer, file.name, mineruFileUrl);
+            } catch (e: any) {
+              console.warn(`[AsyncParse] MinerU 失败: ${e.message}`);
+            }
           }
-        } catch (mineruErr: any) {
-          console.warn(`[Upload] MinerU 提取异常: ${mineruErr.message}，走 AI base64 兜底`);
-          extractedText = '';
-        }
-      }
 
-      // 最后兜底：用 AI 从 base64 中提取
-      if (!extractedText || extractedText.length < 20) {
-        console.log('[Upload] 走 AI base64 提取兜底');
-        const extractionPrompt = `你是一个PDF简历文本提取助手。下面是一份PDF简历的base64编码数据。请仔细阅读内容，将其转换为结构化的Markdown文本。保留所有可读的信息：姓名、联系方式、工作经历、教育背景、技能、项目经历等。如果内容中包含乱码或无法识别的字符，尽最大努力推断正确内容。直接输出Markdown文本，不要添加任何额外说明。`;
-        extractedText = await callAI(c.env, extractionPrompt,
-          `以下是一份PDF简历的base64编码数据，请提取其中所有可读文本并转为Markdown格式（保留所有信息）：\n\n${fileBase64.substring(0, 32000)}${fileBase64.length > 32000 ? '\n\n[内容截断]' : ''}`, 'deepseek-chat');
-      }
+          // MinerU 失败时用 AI base64 兜底
+          if (!extractedText || extractedText.length < 20) {
+            console.log('[AsyncParse] 走 AI base64 提取兜底');
+            const extractionPrompt = `你是一个PDF简历文本提取助手。请将以下base64编码的PDF内容转换为结构化的Markdown文本。保留所有可读的信息。直接输出Markdown文本。`;
+            extractedText = await callAI(c.env, extractionPrompt,
+              `以下是一份PDF简历的base64编码数据，请提取其中所有可读文本并转为Markdown格式：\n\n${fileBase64.substring(0, 32000)}${fileBase64.length > 32000 ? '\n\n[内容截断]' : ''}`, 'deepseek-chat');
+          }
 
-      // 将提取的文本存入 `raw_text`
-      if (extractedText && extractedText.length > 20) {
-        try {
-          await c.env.DB.prepare('UPDATE resumes SET raw_text = ?, updated_at = ? WHERE id = ?')
-            .bind(extractedText.substring(0, 50000), now(), recordId).run();
-        } catch {}
-      }
+          // 保存提取的文本到 D1
+          if (extractedText && extractedText.length > 20) {
+            try {
+              await c.env.DB.prepare('UPDATE resumes SET raw_text = ?, updated_at = ? WHERE id = ?')
+                .bind(extractedText.substring(0, 50000), now(), recordId).run();
+            } catch {}
+          }
 
-      // 第二阶段：用纯文本做深度结构化解析（质量大幅提升）
-      const customPrompt = await getCustomPrompt(c.env, 'parse_resume_pdf');
-      let systemPrompt: string, userPrompt: string;
-      if (customPrompt) {
-        let sp = customPrompt.system;
-        let up = customPrompt.user;
-        if (sp.includes('{candidate_name}')) sp = sp.replace(/\{candidate_name\}/g, fileNameWithoutExt);
-        if (up.includes('{candidate_name}')) up = up.replace(/\{candidate_name\}/g, fileNameWithoutExt);
-        if (up.includes('{resume_text}')) up = up.replace(/\{resume_text\}/g, extractedText || '');
-        systemPrompt = sp;
-        userPrompt = up;
-      } else {
-        // 增强版默认配置 —— 中文优化，字段更全面
-        systemPrompt = `你是一个专业的简历解析助手。请从简历文本中提取以下所有信息，并用JSON格式返回（不要加markdown代码块）。尽可能提取每个字段，找不到的字段设为null或空字符串。
+          // 用 DeepSeek 做结构化解析
+          const parsePrompt = `你是一个专业的简历解析助手。{candidate_name}的简历文本如下，请从中提取完整字段并以JSON返回。`;
+          const systemPrompt = `你是一个专业的简历解析助手。请从简历文本中提取以下所有信息，并用JSON格式返回（不要加markdown代码块）。尽可能提取每个字段，找不到的字段设为null或空字符串。
 
 {
   "name": "候选人姓名",
@@ -2705,56 +2728,53 @@ app.post('/api/resumes', authMiddleware, async (c) => {
   "skills": ["技能1", "技能2", "技能3", "..."],
   "current_company": "目前/最近所在公司",
   "current_position": "目前/最近职位",
-  "work_experience_summary": "工作经历摘要（200字以内，突出公司、职位、职责、业绩）",
+  "work_experience_summary": "工作经历摘要（200字以内）",
   "advantage": "候选人核心优势分析（3-5个优势，200字以内）",
   "risk": "候选人潜在风险点（如跳槽频繁、技能短板等，200字以内）",
   "evaluation": "综合评估（100字以内）"
 }`;
-        userPrompt = `以下是一份简历的纯文本内容，请从中提取所有字段信息：\n\n${extractedText || '（AI未能提取到文本，以下为原始base64数据）\n' + fileBase64.substring(0, 16000)}`;
-      }
-      const aiResp = await callAI(c.env, systemPrompt, userPrompt, 'deepseek-chat');
-      if (aiResp) {
-        const parsed = JSON.parse(extractJSON(aiResp) || '{}');
-        parsedName = parsed.name || fileNameWithoutExt;
-        parsedGender = parsed.gender || '';
-        parsedAge = parsed.age || null;
-        parsedEducation = parsed.education || '';
-        parsedCity = parsed.city || '';
-        parsedAdvantage = parsed.advantage || '';
-        parsedRisk = parsed.risk || '';
-        parsedEval = parsed.evaluation || '';
-        parsedPhone = parsed.phone || '';
-        parsedEmail = parsed.email || '';
-        parsedSkills = Array.isArray(parsed.skills) ? parsed.skills : [];
-        parsedWorkYears = parsed.work_years || null;
-        parsedExperience = parsed.work_experience_summary || '';
-      }
-    } catch (aiErr: any) {
-      console.error(`[Upload] AI parsing failed: ${aiErr.message}`);
+          const userPrompt = `以下是一份简历的纯文本内容，请从中提取所有字段信息：\n\n${extractedText || fileBase64.substring(0, 16000)}`;
+          const aiResp = await callAI(c.env, systemPrompt, userPrompt, 'deepseek-chat');
+          let parsed: any = {};
+          try {
+            parsed = JSON.parse(extractJSON(aiResp) || '{}');
+          } catch { parsed = {}; }
+
+          // 更新 Bitable 记录
+          try {
+            const updateFields: Record<string, any> = {};
+            const parsedName = parsed.name || fileNameWithoutExt;
+            if (parsedName && parsedName !== fileNameWithoutExt) updateFields['姓名'] = parsedName;
+            if (parsed.gender) updateFields['性别'] = parsed.gender;
+            if (parsed.age) updateFields['年龄'] = parsed.age;
+            if (parsed.education) updateFields['学历'] = parsed.education;
+            if (parsed.city) updateFields['城市'] = parsed.city;
+            if (parsed.advantage) updateFields['优势分析'] = parsed.advantage;
+            if (parsed.risk) updateFields['风险点'] = parsed.risk;
+            if (parsed.evaluation) updateFields['AI简历评估'] = parsed.evaluation;
+            if (parsed.phone) updateFields['手机'] = parsed.phone;
+            if (parsed.email) updateFields['邮箱'] = parsed.email;
+            if (parsed.work_years) updateFields['工作年限'] = parsed.work_years;
+            if (Array.isArray(parsed.skills) && parsed.skills.length > 0) updateFields['技能'] = parsed.skills.join(', ');
+            if (parsed.work_experience_summary) updateFields['工作经历'] = parsed.work_experience_summary;
+            await bitableUpdateRecord(c.env, tableId, recordId, updateFields);
+            console.log(`[AsyncParse] 解析完成并更新 Bitable: ${parsedName}`);
+          } catch (updateErr: any) {
+            console.error(`[AsyncParse] 更新 Bitable 失败: ${updateErr.message}`);
+          }
+
+          // 清理临时文件
+          tempFileStore.delete(mineruFileKey);
+        } catch (parseErr: any) {
+          console.error(`[AsyncParse] 后台解析异常: ${parseErr.message}`);
+          tempFileStore.delete(mineruFileKey);
+        }
+      })());
+    } catch (waitErr: any) {
+      console.error(`[AsyncParse] waitUntil 失败: ${waitErr.message}`);
     }
 
-    // 4. 更新 Bitable 记录（AI 解析结果）
-    try {
-      const updateFields: Record<string, any> = {};
-      if (parsedName && parsedName !== fileNameWithoutExt) updateFields['姓名'] = parsedName;
-      if (parsedGender) updateFields['性别'] = parsedGender;
-      if (parsedAge) updateFields['年龄'] = parsedAge;
-      if (parsedEducation) updateFields['学历'] = parsedEducation;
-      if (parsedCity) updateFields['城市'] = parsedCity;
-      if (parsedAdvantage) updateFields['优势分析'] = parsedAdvantage;
-      if (parsedRisk) updateFields['风险点'] = parsedRisk;
-      if (parsedEval) updateFields['AI简历评估'] = parsedEval;
-      if (parsedPhone) updateFields['手机'] = parsedPhone;
-      if (parsedEmail) updateFields['邮箱'] = parsedEmail;
-      if (parsedWorkYears) updateFields['工作年限'] = parsedWorkYears;
-      if (parsedSkills.length > 0) updateFields['技能'] = parsedSkills.join(', ');
-      if (parsedExperience) updateFields['工作经历'] = parsedExperience;
-      await bitableUpdateRecord(c.env, tableId, recordId, updateFields);
-    } catch (updateErr: any) {
-      console.error(`[Upload] Failed to update bitable with AI data: ${updateErr.message}`);
-    }
-
-    // 5. 获取最终记录并返回
+    // 4. 立即返回前端（不等待 AI 解析完成）
     const record = await bitableGetRecord(c.env, tableId, recordId);
     if (!record) {
       return c.json({ detail: '记录已创建但获取详情失败' }, 500);
@@ -3051,12 +3071,22 @@ app.post('/api/resumes/cache-files', authMiddleware, async (c) => {
       const resp = await downloadFeishuAttachment(c.env, fileToken, tmpUrl);
       if (resp) {
         const blob = await resp.clone().arrayBuffer();
-        const b64 = bufToB64(blob);
         const candidateName = f['姓名'] || 'resume';
-        await c.env.DB.prepare(
-          'INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-        ).bind(rid, 'cache_' + fileToken, candidateName + '.pdf', blob.byteLength, b64, new Date().toISOString()).run();
-        cached++;
+        if (blob.byteLength >= PDF_D1_STORAGE_LIMIT) {
+          console.log(`[cache-files] ${candidateName} PDF ${blob.byteLength} bytes 超过 D1 上限，跳过缓存`);
+          skipped++;
+        } else {
+          const b64 = bufToB64(blob);
+          try {
+            await c.env.DB.prepare(
+              'INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+            ).bind(rid, 'cache_' + fileToken, candidateName + '.pdf', blob.byteLength, b64, new Date().toISOString()).run();
+            cached++;
+          } catch (e: any) {
+            console.warn(`[cache-files] ${candidateName} D1 写入失败: ${e.message}`);
+            failed++;
+          }
+        }
       } else {
         failed++;
       }
@@ -3120,10 +3150,20 @@ app.post('/api/resumes/:id/cache-file', async (c) => {
       return c.json({ detail: '不是有效的 PDF 文件' }, 400);
     }
     const b64 = bufToB64(ab);
-    await c.env.DB.prepare(
-      'INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).bind(id, 'browser_cache_' + id, candidateName + '.pdf', ab.byteLength, b64, new Date().toISOString()).run();
-    return c.json({ success: true, file_size: ab.byteLength });
+    let fileCached = false;
+    if (ab.byteLength >= PDF_D1_STORAGE_LIMIT) {
+      console.log(`[cache-file] ${id} PDF ${ab.byteLength} bytes 超过 D1 上限 ${PDF_D1_STORAGE_LIMIT}，跳过 D1 缓存`);
+    } else {
+      try {
+        await c.env.DB.prepare(
+          'INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(id, 'browser_cache_' + id, candidateName + '.pdf', ab.byteLength, b64, new Date().toISOString()).run();
+        fileCached = true;
+      } catch (e: any) {
+        console.warn(`[cache-file] D1 缓存失败 ${id}: ${e.message}`);
+      }
+    }
+    return c.json({ success: true, file_size: ab.byteLength, cached: fileCached });
   } catch (e) {
     return c.json({ detail: '缓存失败: ' + ((e as any).message || e) }, 500);
   }
@@ -3316,11 +3356,22 @@ app.post('/api/resumes/import-from-feishu', authMiddleware, async (c) => {
               const resp = await downloadFeishuAttachment(c.env, fileToken, tmpUrl);
               if (resp) {
                 const blob = await resp.clone().arrayBuffer();
-                const b64 = bufToB64(blob);
-                await c.env.DB.prepare(
-                  'INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-                ).bind(rid, 'import_' + fileToken, candidateName + '.pdf', blob.byteLength, b64, ts).run();
-                pdfCached++;
+                // 与上传路径一致的 D1 大小保护：base64 比 original 大 ~33%，超过阈值写入会触发 SQLITE_TOOBIG
+                if (blob.byteLength < PDF_D1_STORAGE_LIMIT) {
+                  const b64 = bufToB64(blob);
+                  try {
+                    await c.env.DB.prepare(
+                      'INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+                    ).bind(rid, 'import_' + fileToken, candidateName + '.pdf', blob.byteLength, b64, ts).run();
+                    pdfCached++;
+                  } catch (e: any) {
+                    pdfFailed++;
+                    console.warn(`[FeishuImport] D1 缓存失败 ${candidateName}: ${e.message}（大文件跳过，需要时再从飞书按需下载）`);
+                  }
+                } else {
+                  pdfFailed++;
+                  console.log(`[FeishuImport] ${candidateName} PDF ${blob.byteLength} bytes 超过 D1 上限 ${PDF_D1_STORAGE_LIMIT}，跳过 D1 缓存（需要时从飞书重新下载）`);
+                }
               } else {
                 pdfFailed++;
               }
@@ -6761,13 +6812,17 @@ async function downloadAndExtractFromFeishu(env: Env, resumeId: string, candidat
     if (!resp) return null;
     const blob = await resp.clone().arrayBuffer();
     const b64 = bufToB64(blob);
-    // 存到 resume_files
-    try {
-      await env.DB.prepare(
-        'INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-      ).bind(resumeId, 'import_' + fileToken, candidateName + '.pdf', blob.byteLength, b64, new Date().toISOString()).run();
-    } catch {}
-    // 用 AI 从 base64 提取文本
+    // 存到 resume_files（小文件才缓存，大文件跳过避免 SQLITE_TOOBIG —— 文本仍由下方 AI 从 base64 提取）
+    if (blob.byteLength < PDF_D1_STORAGE_LIMIT) {
+      try {
+        await env.DB.prepare(
+          'INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(resumeId, 'import_' + fileToken, candidateName + '.pdf', blob.byteLength, b64, new Date().toISOString()).run();
+      } catch {}
+    } else {
+      console.log(`[downloadAndExtract] ${candidateName} PDF ${blob.byteLength} bytes 超过 D1 上限，跳过缓存`);
+    }
+    // 用 AI 从 base64 提取文本（不论缓存是否成功都执行）
     const base64Content = b64.substring(0, 100000);
     const extraction = await callAI(env,
       'You are a PDF text extractor. Extract ALL readable text from this base64 PDF content. Return ONLY the extracted text, no explanations.',
