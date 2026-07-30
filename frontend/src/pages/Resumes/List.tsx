@@ -839,9 +839,7 @@ const ResumesList: React.FC = () => {
             const fallbackForm = new FormData();
             fallbackForm.append('position_id', values.position_id);
             fallbackForm.append('file', file);
-            await request.post('/resumes', fallbackForm, {
-              headers: { 'Content-Type': 'multipart/form-data' },
-            });
+            await request.post('/resumes', fallbackForm);
             message.success('上传成功，AI解析中...');
           } else {
             throw err;
@@ -857,7 +855,6 @@ const ResumesList: React.FC = () => {
           formData.append('pdf_texts', pdfText);
         }
         await request.post('/resumes/batch', formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
           timeout: 180000,
         });
         hide();
@@ -1287,6 +1284,20 @@ const ResumesList: React.FC = () => {
                   ) : (
                     <div style={{ marginTop: 6, border: '1px solid #f0f0f0', borderRadius: 8, padding: '6px 10px', background: '#fafafa' }}>
                       <span style={{ color: '#bfbfbf', fontSize: 12 }}>暂无 AI 评估</span>
+                    </div>
+                  )}
+
+                  {/* 个性化需求匹配 — 不满足时红色醒目提示 */}
+                  {record.personalized_unmet_items && record.personalized_unmet_items.length > 0 && (
+                    <div style={{ marginTop: 6, border: '2px solid #ff4d4f', borderRadius: 8, padding: '8px 12px', background: '#fff2f0' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#cf1322', marginBottom: 4 }}>
+                        ⚠ 个性化需求不匹配
+                      </div>
+                      {record.personalized_unmet_items.map((item: string, i: number) => (
+                        <div key={i} style={{ fontSize: 12, color: '#a8071a', lineHeight: '20px', paddingLeft: 12 }}>
+                          · {item}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </Card>

@@ -2886,7 +2886,13 @@ app.post('/api/resumes', authMiddleware, async (c) => {
 - match_score: 人岗匹配度（0-100的整数）
 - recommendation: 推荐建议（"strongly_recommend"/"recommend"/"neutral"/"not_recommend"/"strongly_not_recommend"）
 - summary: 综合分析摘要（中文，2-3句话）
-- suggested_questions: 建议面试问题（中文，3-5个）`;
+- suggested_questions: 建议面试问题（中文，3-5个）
+
+第三部分 - 个性化需求匹配（如果岗位有个性化需求，这是重点评估部分！）：
+- personalized_match_score: 个性化需求匹配度（0-100的整数），0表示完全不匹配，100表示完全匹配
+- personalized_met_items: 已满足的个性化需求列表（数组），逐条描述
+- personalized_unmet_items: 未满足的个性化需求列表（数组），逐条说明缺少或不符合的内容
+  **注意**：如果个性化需求有要求但候选人完全不满足，personalized_match_score 设为较低分数（如0-20），unmet_items 详细列出未满足项。个性化需求的匹配是评估的重点，如果未满足必须在 unmet_items 中明确指出。`;
 
           const aiResp = await callAI(c.env, systemPrompt, userPrompt, 'deepseek-chat');
           let parsed: any = {};
@@ -2953,6 +2959,10 @@ app.post('/api/resumes', authMiddleware, async (c) => {
               location: filenameInfo.location || null,
               salary: filenameInfo.salary || null,
               metaInfo: filenameInfo.metaInfo || null,
+              // 个性化需求匹配（重点）
+              personalized_match_score: parsed.personalized_match_score ?? null,
+              personalized_met_items: parsed.personalized_met_items || null,
+              personalized_unmet_items: parsed.personalized_unmet_items || null,
               // 岗位要求信息
               position_requirements: positionReq ? {
                 positionTitle: positionReq.positionTitle,
@@ -3035,7 +3045,7 @@ app.get('/api/resumes', authMiddleware, async (c) => {
     // 从 D1 加载 created_at 和 parse_status
     try {
       const { results: d1Rows } = await c.env.DB.prepare(
-        "SELECT id, candidate_name, created_at, parse_status FROM resumes WHERE created_at IS NOT NULL"
+        "SELECT id, candidate_name, created_at, parse_status, parsed_data FROM resumes WHERE created_at IS NOT NULL"
       ).all();
       const d1Map = new Map((d1Rows || []).map((r: any) => [r.id, r]));
       items = items.map((item: any) => {
@@ -3048,6 +3058,15 @@ app.get('/api/resumes', authMiddleware, async (c) => {
           // 补充解析状态（只有终态才覆盖飞书状态，processing 不覆盖以免干扰飞书已有数据）
           if (d1.parse_status && d1.parse_status !== 'processing') {
             item.parse_status = d1.parse_status;
+          }
+          // 从 parsed_data 提取个性化需求匹配信息
+          if (d1.parsed_data) {
+            try {
+              const pd = typeof d1.parsed_data === 'string' ? JSON.parse(d1.parsed_data) : d1.parsed_data;
+              if (pd.personalized_match_score !== undefined) item.personalized_match_score = pd.personalized_match_score;
+              if (pd.personalized_met_items) item.personalized_met_items = pd.personalized_met_items;
+              if (pd.personalized_unmet_items) item.personalized_unmet_items = pd.personalized_unmet_items;
+            } catch {}
           }
         }
         // 如果还是没有时间，那就用飞书 record.created_time（已加8小时）或当前时间的兜底
@@ -3180,6 +3199,16 @@ app.get('/api/resumes/:id', authMiddleware, async (c) => {
             item.ai_review = d1Row.ai_review;
           }
         }
+        // 从 parsed_data 提取个性化需求匹配信息（无论是否有 ai_review）
+        if (d1Row.parsed_data) {
+          try {
+            const pd = typeof d1Row.parsed_data === 'string' ? JSON.parse(d1Row.parsed_data) : d1Row.parsed_data;
+            if (pd.personalized_match_score !== undefined) item.personalized_match_score = pd.personalized_match_score;
+            if (pd.personalized_met_items) item.personalized_met_items = pd.personalized_met_items;
+            if (pd.personalized_unmet_items) item.personalized_unmet_items = pd.personalized_unmet_items;
+          } catch {}
+        }
+
         // 次优：从 parsed_data 构建 ai_review（异步解析流水线写入的完整 JSON）
         if (!item.ai_review && d1Row.parsed_data) {
           try {
@@ -3187,6 +3216,10 @@ app.get('/api/resumes/:id', authMiddleware, async (c) => {
               ? JSON.parse(d1Row.parsed_data)
               : d1Row.parsed_data;
             item.parsed_data = parsed;
+            // 提取个性化需求匹配信息到顶层
+            if (parsed.personalized_match_score !== undefined) item.personalized_match_score = parsed.personalized_match_score;
+            if (parsed.personalized_met_items) item.personalized_met_items = parsed.personalized_met_items;
+            if (parsed.personalized_unmet_items) item.personalized_unmet_items = parsed.personalized_unmet_items;
             if (parsed.advantage || parsed.risk || parsed.summary || parsed.match_score !== undefined || parsed.recommendation) {
               item.ai_review = {
                 summary: parsed.summary || '',
@@ -3935,23 +3968,196 @@ app.post('/api/resumes/scramble-times', authMiddleware, async (c) => {
 // 在第 1430 行和 3341 行的 create_time 表达式中，需将 + 8h 补上
 
 app.post('/api/resumes/batch', authMiddleware, async (c) => {
-  const body = await c.req.json();
-  const results = [];
-  for (const item of (body.items || body || [])) {
-    const id = uuid();
-    const cols = ['id', 'created_at'];
-    const vals: any[] = [id, now()];
-    for (const [k, v] of Object.entries(item)) {
-      if (validCol(k) && !['id', 'created_at'].includes(k)) {
-        cols.push(k);
-        vals.push(prepareValue(v));
+  try {
+    const formData = await c.req.formData();
+    const files = formData.getAll('files') as File[];
+    const pdfTexts = formData.getAll('pdf_texts') as string[];
+    const positionId = formData.get('position_id') as string;
+
+    if (!files || files.length === 0) {
+      return c.json({ detail: '请上传至少一份简历文件' }, 400);
+    }
+
+    // 预取请求级数据，避免 waitUntil 中访问 c.req
+    const originUrl = new URL(c.req.url).origin;
+    const authHeader = c.req.header('Authorization') || '';
+
+    const results: { name: string; id: string; status: string }[] = [];
+    const errors: string[] = [];
+    const nowCst = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19);
+
+    const safeMsg = (e: any) => (e?.message || String(e)).substring(0, 100);
+    const parseTasks: Promise<void>[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const pdfText = pdfTexts[i] || '';
+      const fileNameWithoutExt = file.name.replace(/\.pdf$/i, '');
+
+      try {
+        const fileBuffer = await file.arrayBuffer();
+        const fileSize = file.size;
+        const fileBase64 = bufToB64(fileBuffer);
+
+        // 1. 创建 Bitable 记录
+        const tableId = getBitableTableId(c.env, 'talent');
+        const fields: Record<string, any> = { '姓名': fileNameWithoutExt };
+        if (positionId) {
+          try {
+            const posResp = await fetch(`${originUrl}/api/positions/${positionId}`, {
+              headers: { Authorization: authHeader },
+            });
+            if (posResp.ok) {
+              const posData: any = await posResp.json();
+              if (posData?.title) fields['面试岗位'] = posData.title;
+            }
+          } catch {}
+        }
+
+        const recordId = await bitableCreateRecord(c.env, tableId, fields);
+        if (!recordId) {
+          errors.push(`${file.name}: 创建飞书记录失败`);
+          continue;
+        }
+
+        // 2. 存文件到 D1（小文件）
+        const fileId = 'file_' + crypto.randomUUID();
+        try {
+          if (fileSize < PDF_D1_STORAGE_LIMIT) {
+            await c.env.DB.prepare(
+              `INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, datetime('now', '+8 hours'))`
+            ).bind(recordId, fileId, file.name, fileSize, fileBase64).run();
+          }
+        } catch (e: any) {
+          console.log(`[BatchUpload] D1 存储失败: ${safeMsg(e)}`);
+        }
+
+        // 3. D1 标记 processing
+        try {
+          await c.env.DB.prepare(
+            `INSERT OR REPLACE INTO resumes (id, candidate_name, parse_status, created_at) VALUES (?, ?, ?, ?)`
+          ).bind(recordId, fileNameWithoutExt, 'processing', nowCst).run();
+        } catch (e: any) {
+          console.log(`[BatchUpload] D1 resumes 插入失败: ${safeMsg(e)}`);
+        }
+
+        // 4. 收集后台异步解析任务（所有文件任务排队串行执行，避免 waitUntil 并发耗尽 Worker 资源）
+        const mineruFileKey = crypto.randomUUID();
+        tempFileStore.set(mineruFileKey, {
+          data: fileBuffer, name: file.name, expiry: Date.now() + TEMP_FILE_TTL,
+        });
+
+        parseTasks.push((async () => {
+          try {
+            console.log(`[BatchParse] 开始后台解析: ${fileNameWithoutExt}`);
+            let extractedText = pdfText || '';
+            if (!extractedText || extractedText.length < 20) {
+              try {
+                const mineruUrl = `${originUrl}/api/temp-file/${mineruFileKey}/${encodeURIComponent(file.name)}`;
+                extractedText = await extractTextWithMinerU(c.env, fileBuffer, file.name, mineruUrl);
+              } catch (e: any) {
+                console.warn(`[BatchParse] MinerU 失败: ${safeMsg(e)}`);
+              }
+            }
+            if (!extractedText || extractedText.length < 20) {
+              try {
+                extractedText = await callAI(c.env,
+                  '你是一个PDF简历文本提取助手。请将以下base64编码的PDF内容转换为结构化的Markdown文本。',
+                  `以下是一份PDF简历的base64编码数据：\n\n${fileBase64.substring(0, 32000)}`, 'deepseek-chat');
+              } catch {}
+            }
+            if (extractedText && extractedText.length > 20) {
+              try {
+                await c.env.DB.prepare('UPDATE resumes SET raw_text = ?, updated_at = ? WHERE id = ?')
+                  .bind(extractedText.substring(0, 50000), now(), recordId).run();
+              } catch {}
+            }
+            // AI 评估
+            const filenameInfo = parseFilenameInfo(file.name);
+            const detectedPosition = filenameInfo.position || fields['面试岗位'] || '';
+            const positionReq = detectedPosition
+              ? await getPositionRequirements(c.env, detectedPosition).catch(() => null) : null;
+            const evalResult = await callAIScreening(c.env, extractedText || fileBase64.substring(0, 16000),
+              positionReq, { location: filenameInfo.location, salary: filenameInfo.salary, metaInfo: filenameInfo.metaInfo });
+            if (evalResult) {
+              try {
+                const updateFields: Record<string, any> = {};
+                const parsedName = evalResult.candidate_name || evalResult.name || fileNameWithoutExt;
+                if (parsedName && parsedName !== fileNameWithoutExt) updateFields['姓名'] = parsedName;
+                if (evalResult.gender) updateFields['性别'] = evalResult.gender;
+                if (evalResult.age) updateFields['年龄'] = evalResult.age;
+                if (evalResult.highest_degree || evalResult.education) updateFields['学历'] = evalResult.highest_degree || evalResult.education;
+                if (evalResult.summary || evalResult.evaluation) updateFields['AI简历评估'] = evalResult.summary || evalResult.evaluation;
+                if (evalResult.advantage) updateFields['优势分析'] = evalResult.advantage;
+                if (evalResult.risk) updateFields['风险点'] = evalResult.risk;
+                if (evalResult.match_score !== undefined) updateFields['AI简历初筛结果'] = String(evalResult.match_score);
+                const positionField = evalResult.position || detectedPosition || filenameInfo.position;
+                if (positionField) updateFields['面试岗位'] = positionField;
+                await bitableUpdateRecord(c.env, tableId, recordId, updateFields);
+              } catch (e: any) {
+                console.error(`[BatchParse] Bitable更新失败: ${safeMsg(e)}`);
+              }
+              try {
+                const fullData = {
+                  candidate_name: evalResult.candidate_name || evalResult.name || fileNameWithoutExt,
+                  gender: evalResult.gender || null, age: evalResult.age || null,
+                  highest_degree: evalResult.highest_degree || evalResult.education || null,
+                  school: evalResult.school || null, major: evalResult.major || null,
+                  advantage: evalResult.advantage || null, risk: evalResult.risk || null,
+                  match_score: evalResult.match_score || null,
+                  summary: evalResult.summary || evalResult.evaluation || null,
+                  position: evalResult.position || detectedPosition,
+                  location: filenameInfo.location || null, salary: filenameInfo.salary || null,
+                  personalized_match_score: evalResult.personalized_match_score ?? null,
+                  personalized_met_items: evalResult.personalized_met_items || null,
+                  personalized_unmet_items: evalResult.personalized_unmet_items || null,
+                };
+                await c.env.DB.prepare(
+                  'UPDATE resumes SET parse_status = ?, parsed_data = ?, candidate_name = ?, raw_text = ?, updated_at = ? WHERE id = ?'
+                ).bind('completed', JSON.stringify(fullData),
+                  evalResult.candidate_name || evalResult.name || fileNameWithoutExt,
+                  (extractedText || '').substring(0, 50000), now(), recordId).run();
+              } catch (e: any) {
+                console.error(`[BatchParse] D1更新失败: ${safeMsg(e)}`);
+                await c.env.DB.prepare('UPDATE resumes SET parse_status = ?, updated_at = ? WHERE id = ?')
+                  .bind('completed', now(), recordId).run().catch(() => {});
+              }
+            } else {
+              await c.env.DB.prepare('UPDATE resumes SET parse_status = ?, updated_at = ? WHERE id = ?')
+                .bind('failed', now(), recordId).run().catch(() => {});
+            }
+          } catch (e: any) {
+            console.error(`[BatchParse] 后台解析异常: ${fileNameWithoutExt} ${safeMsg(e)}`);
+            await c.env.DB.prepare('UPDATE resumes SET parse_status = ?, updated_at = ? WHERE id = ?')
+              .bind('failed', now(), recordId).run().catch(() => {});
+          }
+          tempFileStore.delete(mineruFileKey);
+        })());
+
+        results.push({ name: file.name, id: recordId, status: 'processing' });
+      } catch (e: any) {
+        errors.push(`${file.name}: ${safeMsg(e)}`);
       }
     }
-    const placeholders = cols.map(() => '?').join(', ');
-    await c.env.DB.prepare(`INSERT INTO resumes (${cols.join(', ')}) VALUES (${placeholders})`).bind(...vals).run();
-    results.push(id);
+
+    // 所有文件的后台解析串行执行，避免多个 waitUntil 并发耗尽 Worker CPU
+    if (parseTasks.length > 0) {
+      c.executionCtx.waitUntil((async () => {
+        for (const task of parseTasks) {
+          try { await task; } catch (e) { console.error(`[Batch] 后台解析任务异常: ${safeMsg(e)}`); }
+        }
+      })());
+    }
+
+    return c.json({
+      total: files.length,
+      processing: results.length,
+      errors: errors.length > 0 ? errors : undefined,
+      ids: results.map(r => r.id),
+    });
+  } catch (e: any) {
+    return c.json({ detail: '批量上传失败: ' + (e?.message || String(e)) }, 500);
   }
-  return c.json({ created: results.length, ids: results });
 });
 
 app.post('/api/resumes/:id/reparse', authMiddleware, async (c) => {
@@ -4003,7 +4209,13 @@ app.post('/api/resumes/:id/reparse', authMiddleware, async (c) => {
 - match_score: 人岗匹配度（0-100的整数）
 - recommendation: 推荐建议（"strongly_recommend"/"recommend"/"neutral"/"not_recommend"/"strongly_not_recommend"）
 - summary: 综合分析摘要（中文，2-3句话）
-- suggested_questions: 建议面试问题（中文，3-5个）`;
+- suggested_questions: 建议面试问题（中文，3-5个）
+
+第三部分 - 个性化需求匹配（如果岗位有个性化需求，这是重点评估部分！）：
+- personalized_match_score: 个性化需求匹配度（0-100的整数），0表示完全不匹配，100表示完全匹配
+- personalized_met_items: 已满足的个性化需求列表（数组），逐条描述
+- personalized_unmet_items: 未满足的个性化需求列表（数组），逐条说明缺少或不符合的内容
+  **注意**：如果个性化需求有要求但候选人完全不满足，personalized_match_score 设为较低分数（如0-20），unmet_items 详细列出未满足项。个性化需求的匹配是评估的重点，如果未满足必须在 unmet_items 中明确指出。`;
     userPrompt = '简历文本（请提取完整信息）：\n' + rawText;
   }
   try {
@@ -7809,7 +8021,13 @@ function buildAIScreeningPrompt(resumeText: string, positionReq: any | null, ext
 - match_score: 人岗匹配度（0-100的整数）
 - recommendation: 推荐建议（"strongly_recommend"/"recommend"/"neutral"/"not_recommend"/"strongly_not_recommend"）
 - summary: 综合分析摘要（中文，2-3句话）
-- suggested_questions: 建议面试问题（中文，3-5个）`;
+- suggested_questions: 建议面试问题（中文，3-5个）
+
+第三部分 - 个性化需求匹配（如果岗位有个性化需求，这是重点评估部分！）：
+- personalized_match_score: 个性化需求匹配度（0-100的整数），0表示完全不匹配，100表示完全匹配
+- personalized_met_items: 已满足的个性化需求列表（数组），逐条描述
+- personalized_unmet_items: 未满足的个性化需求列表（数组），逐条说明缺少或不符合的内容
+  **注意**：如果个性化需求有要求但候选人完全不满足，personalized_match_score 设为较低分数（如0-20），unmet_items 详细列出未满足项。个性化需求的匹配是评估的重点，如果未满足必须在 unmet_items 中明确指出。`;
 
   const userPrompt = [
     `简历文本（请提取完整信息）：\n${resumeText}`,

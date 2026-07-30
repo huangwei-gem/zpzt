@@ -620,6 +620,42 @@ const ResumeDetail: React.FC = () => {
           {resume.ai_review ? (
             typeof resume.ai_review === 'object' ? (
               <div style={{ background: '#F8FAFC', padding: '20px', borderRadius: '12px', border: '1px solid #E2E8F0' }}>
+                {/* 个性化需求匹配 — 置于 AI 评估最顶部，不满足时红色醒目 */}
+                {resume.personalized_unmet_items && resume.personalized_unmet_items.length > 0 && (
+                  <div style={{ marginBottom: 16, border: '2px solid #ff4d4f', borderRadius: 8, padding: '12px 16px', background: '#fff2f0' }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#cf1322', marginBottom: 8 }}>
+                      ⚠ 个性化需求不匹配（重点）
+                    </div>
+                    {resume.personalized_unmet_items.map((item: string, i: number) => (
+                      <div key={i} style={{ fontSize: 13, color: '#a8071a', lineHeight: '22px', paddingLeft: 12 }}>
+                        · {item}
+                      </div>
+                    ))}
+                    {resume.personalized_match_score !== undefined && (
+                      <div style={{ marginTop: 8, fontSize: 13, color: '#a8071a', fontWeight: 600 }}>
+                        个性化匹配度：{resume.personalized_match_score}/100
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* 个性化需求全部满足时绿色提示 */}
+                {resume.personalized_met_items && resume.personalized_met_items.length > 0 && (!resume.personalized_unmet_items || resume.personalized_unmet_items.length === 0) && (
+                  <div style={{ marginBottom: 16, border: '2px solid #52c41a', borderRadius: 8, padding: '12px 16px', background: '#f6ffed' }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#389e0d', marginBottom: 8 }}>
+                      ✓ 个性化需求全部满足
+                    </div>
+                    <div style={{ fontSize: 13, color: '#135200' }}>
+                      {resume.personalized_met_items.map((item: string, i: number) => (
+                        <div key={i} style={{ lineHeight: '22px', paddingLeft: 12 }}>· {item}</div>
+                      ))}
+                    </div>
+                    {resume.personalized_match_score !== undefined && (
+                      <div style={{ marginTop: 8, fontSize: 13, color: '#389e0d', fontWeight: 600 }}>
+                        个性化匹配度：{resume.personalized_match_score}/100
+                      </div>
+                    )}
+                  </div>
+                )}
                 {resume.ai_review.summary && (
                   <div style={{ marginBottom: 16, padding: '12px 16px', background: '#EEF2FF', borderRadius: '8px', borderLeft: '4px solid #6366F1' }}>
                     <Text strong style={{ color: '#4338CA' }}>总体评价：</Text>
