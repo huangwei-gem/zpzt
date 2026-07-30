@@ -1428,6 +1428,7 @@ function parseTalentRecord(record: any): any {
     biz_review: getFirstValue(f['业务复核结果']) || '',
     hr_pass_date: f['HR初筛通过日期'] || null,
     create_time: f['创建时间'] || (record.created_time ? (() => { const cst = new Date(record.created_time * 1 + 8 * 60 * 60 * 1000); return cst.toISOString().replace('T', ' ').substring(0, 19); })() : null) || null,
+    _raw_record_created_time: record.created_time || null,
     status: mapHrReviewToStatus(getFirstValue(f['HR复核结果']) || ''),
     match_score: extractScoreFromEval(aiEvalStr),
     feishu_record_id: record.record_id,
@@ -2674,7 +2675,7 @@ app.post('/api/resumes', authMiddleware, async (c) => {
     try {
       if (fileSize < PDF_D1_STORAGE_LIMIT) {
         await c.env.DB.prepare(
-          `INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`
+          `INSERT OR REPLACE INTO resume_files (id, kv_key, file_name, file_size, content, created_at) VALUES (?, ?, ?, ?, ?, datetime('now', '+8 hours'))`
         ).bind(recordId, fileId, file.name, fileSize, fileBase64).run();
         fileStored = true;
       }
@@ -2699,7 +2700,23 @@ app.post('/api/resumes', authMiddleware, async (c) => {
       }
     }
 
-    // 3. 后台异步 AI 解析简历（先返回前端，解析完成后自动更新）
+    // 3. 立即写入 D1 resumes 表（含 created_at + parse_status='processing'），前端可立即展示
+    const nowCst = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19);
+    try {
+      await c.env.DB.prepare(
+        `INSERT OR REPLACE INTO resumes (id, candidate_name, parse_status, created_at) VALUES (?, ?, ?, ?)`
+      ).bind(
+        recordId,
+        fileNameWithoutExt,
+        'processing',
+        nowCst
+      ).run();
+      console.log(`[Upload] D1 resumes 记录已创建: ${recordId}, time=${nowCst}`);
+    } catch (e: any) {
+      console.log(`[Upload] D1 resumes 插入失败: ${e.message}`);
+    }
+
+    // 4. 后台异步 AI 解析简历（先返回前端，解析完成后自动更新）
     // 将 PDF 文件存入 tempFileStore 供后台异步解析使用
     const mineruFileKey = crypto.randomUUID();
     tempFileStore.set(mineruFileKey, {
@@ -2800,10 +2817,23 @@ app.post('/api/resumes', authMiddleware, async (c) => {
             console.error(`[AsyncParse] 更新 Bitable 失败: ${updateErr.message}`);
           }
 
+          // 解析完成标记 D1 状态为 completed
+          try {
+            await c.env.DB.prepare(
+              'UPDATE resumes SET parse_status = ?, candidate_name = ?, updated_at = ? WHERE id = ?'
+            ).bind('completed', parsed.name || fileNameWithoutExt, now(), recordId).run();
+          } catch {}
+
           // 清理临时文件
           tempFileStore.delete(mineruFileKey);
         } catch (parseErr: any) {
           console.error(`[AsyncParse] 后台解析异常: ${parseErr.message}`);
+          // 标记解析失败
+          try {
+            await c.env.DB.prepare(
+              'UPDATE resumes SET parse_status = ?, updated_at = ? WHERE id = ?'
+            ).bind('failed', now(), recordId).run();
+          } catch {}
           tempFileStore.delete(mineruFileKey);
         }
       })());
@@ -2844,6 +2874,33 @@ app.get('/api/resumes', authMiddleware, async (c) => {
         return item;
       });
     } catch {}
+
+    // 从 D1 加载 created_at 和 parse_status，回退飞书缺失的时间
+    try {
+      const { results: d1Rows } = await c.env.DB.prepare(
+        "SELECT id, created_at, parse_status FROM resumes WHERE created_at IS NOT NULL"
+      ).all();
+      const d1Map = new Map((d1Rows || []).map((r: any) => [r.id, r]));
+      items = items.map((item: any) => {
+        const d1 = d1Map.get(item.id);
+        if (d1) {
+          // 如果飞书没有时间，回退到 D1 的 created_at
+          if (!item.create_time && d1.created_at) {
+            item.create_time = d1.created_at;
+          }
+          // 补充解析状态
+          if (d1.parse_status) {
+            item.parse_status = d1.parse_status;
+          }
+        }
+        // 如果还是没有时间，那就用飞书 record.created_time（已加8小时）或当前时间的兜底
+        if (!item.create_time && item._raw_record_created_time) {
+          const cst = new Date(item._raw_record_created_time * 1 + 8 * 60 * 60 * 1000);
+          item.create_time = cst.toISOString().replace('T', ' ').substring(0, 19);
+        }
+        return item;
+      });
+    } catch { /* D1 回退失败时不阻塞 */ }
 
     // 加载岗位映射表，将 position_applied 映射为标准岗位名
     try {

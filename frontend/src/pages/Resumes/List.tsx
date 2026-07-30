@@ -1241,7 +1241,7 @@ const ResumesList: React.FC = () => {
                     <span style={{ fontWeight: 600, fontSize: 15 }}>{record.candidate_name || '未知'}</span>
                     {/* 入库时间 — 为空的默认今天 */}
                     <Tag style={{ margin: 0, fontSize: 11, border: '1px solid #e6d5ff', background: '#f9f0ff', color: '#531dab' }}>
-                      🕐 {record.create_time ? formatCreateTime(record.create_time) : formatCreateTime(new Date().toISOString())}
+                      🕐 {record.create_time ? formatCreateTime(record.create_time) : '-'}
                     </Tag>
                     <span style={{ color: '#8c8c8c', fontSize: 13 }}>
                       {[
