@@ -384,8 +384,43 @@ async function callAI(env: Env, systemPrompt: string, userPrompt: string, model?
   const deepseekKey = resolveKey(keys, 'AI_API_KEY', env.AI_API_KEY);
   const deepseekBaseUrl = resolveKey(keys, 'AI_BASE_URL') || env.AI_BASE_URL || 'https://api.deepseek.com';
 
-  // 优先使用 Agnes AI（https://www.agnes-ai.com/，agnes-25-flash）
-  // 失败时降级 DeepSeek，再降级 Cloudflare Workers AI。
+  // 优先使用 DeepSeek（deepseek-chat / deepseek-v4-flash）
+  // 失败时降级 Agnes，再降级 Cloudflare Workers AI
+  if (deepseekKey) {
+    const baseUrl = deepseekBaseUrl.replace(/\/+$/, '');
+    const actualModel = model === 'deepseek-v4-flash' ? 'deepseek-chat' : (model || 'deepseek-chat');
+    try {
+      const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${deepseekKey}`,
+        },
+        body: JSON.stringify({
+          model: actualModel,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          max_tokens: 4096,
+        }),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text();
+        console.warn(`[AI] DeepSeek API error ${resp.status}: ${errText}`);
+        throw new Error(`DeepSeek API error ${resp.status}: ${errText}`);
+      }
+      const data: any = await resp.json();
+      if (data?.choices?.[0]?.message?.content) {
+        return data.choices[0].message.content;
+      }
+      throw new Error(`DeepSeek response format unexpected: ${JSON.stringify(data)}`);
+    } catch (e: any) {
+      console.warn(`[AI] DeepSeek 失败，降级 Agnes: ${e.message}`);
+    }
+  }
+
+  // 备选：Agnes AI（https://www.agnes-ai.com/）
   if (agnesKey) {
     const agnesModel = model && model !== 'deepseek-chat' && model !== 'deepseek-v4-flash'
       ? model
@@ -393,39 +428,8 @@ async function callAI(env: Env, systemPrompt: string, userPrompt: string, model?
     try {
       return await callAgnes(env, systemPrompt, userPrompt, agnesModel, keys);
     } catch (e: any) {
-      console.warn(`[AI] Agnes 失败，降级 DeepSeek: ${e.message}`);
+      console.warn(`[AI] Agnes 也失败，降级 Workers AI: ${e.message}`);
     }
-  }
-
-  // 备选：DeepSeek（或兼容的 OpenAI API）
-  if (deepseekKey) {
-    const baseUrl = deepseekBaseUrl.replace(/\/+$/, '');
-    const deepseekModel = model === 'deepseek-v4-flash' ? 'deepseek-chat' : (model || 'deepseek-chat');
-    const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${deepseekKey}`,
-      },
-      body: JSON.stringify({
-        model: deepseekModel,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        max_tokens: 4096,
-      }),
-    });
-    if (!resp.ok) {
-      const errText = await resp.text();
-      console.error(`[AI] DeepSeek API error ${resp.status}: ${errText}`);
-      throw new Error(`DeepSeek API error ${resp.status}: ${errText}`);
-    }
-    const data: any = await resp.json();
-    if (data?.choices?.[0]?.message?.content) {
-      return data.choices[0].message.content;
-    }
-    throw new Error(`DeepSeek API response format unexpected: ${JSON.stringify(data)}`);
   }
 
   // 降级：Cloudflare Workers AI
